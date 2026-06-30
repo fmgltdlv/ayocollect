@@ -1,0 +1,22 @@
+{
+  "name": "@ayocollect/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --persist-to ../../.wrangler/state",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@ayocollect/db": "*",
+    "@ayocollect/posr": "*",
+    "@turf/area": "^7.2.0",
+    "@turf/boolean-intersects": "^7.2.0",
+    "@turf/helpers": "^7.2.0",
+    "@turf/intersect": "^7.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250204.0",
+    "wrangler": "^3.109.1"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@ayocollect/gml",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/map-polygon.ts",
+  "dependencies": {
+    "@ayocollect/db": "*",
+    "@ayocollect/posr": "*",
+    "@terraformer/wkt": "^2.2.1"
+  }
+}

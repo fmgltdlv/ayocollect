@@ -1,0 +1,290 @@
+:root {
+  color-scheme: light dark;
+  font-family: Inter, system-ui, sans-serif;
+  line-height: 1.5;
+  color: #e8eaed;
+  background: #0f1419;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  min-height: 100vh;
+}
+
+.header {
+  padding: 1.5rem 2rem;
+  border-bottom: 1px solid #2a3441;
+  background: #151b23;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.subtitle {
+  margin: 0.25rem 0 1rem;
+  color: #8b949e;
+}
+
+nav {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.nav-link {
+  color: #8b949e;
+  text-decoration: none;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+}
+
+.nav-link.active,
+.nav-link:hover {
+  color: #fff;
+  background: #21262d;
+}
+
+.main {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.card {
+  background: #151b23;
+  border: 1px solid #2a3441;
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.stat {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.stat-label {
+  color: #8b949e;
+  font-size: 0.875rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid #2a3441;
+}
+
+th {
+  color: #8b949e;
+  font-weight: 600;
+}
+
+input,
+button {
+  font: inherit;
+}
+
+input {
+  background: #0f1419;
+  border: 1px solid #2a3441;
+  color: inherit;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+}
+
+button {
+  background: #238636;
+  color: #fff;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: #21262d;
+}
+
+.error {
+  color: #f85149;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge.on_time { background: #23863633; color: #3fb950; }
+.badge.late { background: #f8514933; color: #f85149; }
+.badge.pending { background: #d2992233; color: #d29922; }
+.badge.queued { background: #388bfd33; color: #58a6ff; }
+.badge.running { background: #d2992233; color: #d29922; }
+.badge.completed { background: #23863633; color: #3fb950; }
+.badge.failed { background: #f8514933; color: #f85149; }
+
+.map-container {
+  height: 420px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.form-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+.form-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  color: #8b949e;
+}
+
+.region-picker {
+  border: 1px solid #2a3441;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 0 0 1rem;
+}
+
+.region-picker legend {
+  padding: 0 0.35rem;
+  color: #8b949e;
+  font-size: 0.875rem;
+}
+
+.region-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.region-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: #e8eaed;
+}
+
+.region-option input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+}
+
+.region-option code {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: #8b949e;
+}
+
+.region-formats {
+  margin: 0.75rem 0 0;
+  padding-left: 1.25rem;
+  color: #8b949e;
+  font-size: 0.8125rem;
+}
+
+.region-formats li {
+  margin-bottom: 0.25rem;
+}
+
+.muted {
+  color: #8b949e;
+  font-size: 0.875rem;
+}
+
+.table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.table-header h3 {
+  margin: 0;
+}
+
+.queue-status-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.queue-status-header h3 {
+  margin: 0;
+}
+
+.queue-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+}
+
+.queue-section {
+  margin-top: 1rem;
+}
+
+.queue-section h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.875rem;
+  color: #8b949e;
+}
+
+.queue-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.queue-list li {
+  margin-bottom: 0.25rem;
+}
+
+.queue-status-hint {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+a {
+  color: #58a6ff;
+}
