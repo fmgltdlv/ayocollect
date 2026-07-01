@@ -8,10 +8,6 @@ binding = "DB"
 database_name = "ayocollect-db"
 database_id = "d1d567d9-a127-43f4-be24-1dd370928b48"
 
-[[r2_buckets]]
-binding = "BUCKET"
-bucket_name = "ayocollect-raw"
-
 [[queues.producers]]
 binding = "QUEUE"
 queue = "ayocollect-queue"

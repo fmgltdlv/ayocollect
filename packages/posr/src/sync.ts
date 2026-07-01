@@ -12,20 +12,10 @@ export type SyncTicketResult = {
 export async function fetchTicketBundle(
   ticketBase: string,
   region: UsanRegion = 'NV',
-  bucket?: R2Bucket,
 ): Promise<SyncTicketResult> {
   const posr = await fetchPosrTicket(ticketBase, region);
   if (!posr?.isSuccessful || !posr.posrTicket) {
     return { ticketBase, success: false };
-  }
-
-  const timestamp = Date.now();
-  let payloadR2Key = '';
-  if (bucket) {
-    payloadR2Key = `posr/${region}/${ticketBase}/${timestamp}.json`;
-    await bucket.put(payloadR2Key, JSON.stringify(posr), {
-      httpMetadata: { contentType: 'application/json' },
-    });
   }
 
   const revisions = getRevisionNumbers(posr.posrTicket);
@@ -34,14 +24,6 @@ export async function fetchTicketBundle(
   for (const requestNumber of revisions) {
     const html = await fetchMapHtml(requestNumber, region);
     if (!html) continue;
-
-    let htmlR2Key: string | null = null;
-    if (bucket) {
-      htmlR2Key = `map/${region}/${requestNumber}/${timestamp}.html`;
-      await bucket.put(htmlR2Key, html, {
-        httpMetadata: { contentType: 'text/html' },
-      });
-    }
 
     const wktString = parseMapPolygon(html);
     if (!wktString) continue;
@@ -52,7 +34,7 @@ export async function fetchTicketBundle(
       requestNumber,
       geojson: JSON.stringify(polygon),
       bbox: computeBbox(polygon),
-      htmlR2Key,
+      mapHtml: html,
     });
   }
 
@@ -64,7 +46,6 @@ export async function fetchTicketBundle(
       region,
       ticketBase,
       payload: JSON.stringify(posr),
-      payloadR2Key,
       polygons,
     },
   };
@@ -73,7 +54,6 @@ export async function fetchTicketBundle(
 export async function fetchTicketsBatched(
   ticketBases: string[],
   region: UsanRegion = 'NV',
-  bucket?: R2Bucket,
   onProgress?: (done: number, total: number) => void,
 ): Promise<SyncTicketResult[]> {
   const results: SyncTicketResult[] = [];
@@ -81,7 +61,7 @@ export async function fetchTicketsBatched(
   for (let i = 0; i < ticketBases.length; i += SYNC_CONFIG.MAX_CONCURRENT) {
     const batch = ticketBases.slice(i, i + SYNC_CONFIG.MAX_CONCURRENT);
     const batchResults = await Promise.all(
-      batch.map((ticketBase) => fetchTicketBundle(ticketBase, region, bucket)),
+      batch.map((ticketBase) => fetchTicketBundle(ticketBase, region)),
     );
     results.push(...batchResults);
     onProgress?.(Math.min(i + SYNC_CONFIG.MAX_CONCURRENT, ticketBases.length), ticketBases.length);

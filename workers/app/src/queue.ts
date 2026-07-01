@@ -14,10 +14,10 @@ async function handleIngestTicket(
 ): Promise<void> {
   if (isUsanRegion(message.region)) {
     const payload = JSON.parse(message.payload) as PosrSearchToolResponse;
-    await upsertPosrPayload(env.DB, payload, message.region, message.payloadR2Key || undefined);
+    await upsertPosrPayload(env.DB, payload, message.region, message.payload);
   } else {
     const bundle = JSON.parse(message.payload) as DigalertTicketBundle;
-    await upsertDigalertPayload(env.DB, bundle, message.payloadR2Key || undefined);
+    await upsertDigalertPayload(env.DB, bundle, message.payload);
   }
 
   for (const polygon of message.polygons) {
@@ -28,7 +28,7 @@ async function handleIngestTicket(
       ticketBase,
       polygon.geojson,
       polygon.bbox,
-      polygon.htmlR2Key,
+      polygon.mapHtml,
     );
   }
 }

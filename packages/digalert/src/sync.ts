@@ -12,7 +12,6 @@ export type DigalertSyncResult = {
 export async function fetchDigalertTicketBundle(
   ticketBase: string,
   revision: string = '00A',
-  bucket?: R2Bucket,
   sessionCookies?: Record<string, string>,
 ): Promise<DigalertSyncResult> {
   const bundle = await fetchCompleteTicketBundle(ticketBase, revision, sessionCookies);
@@ -26,22 +25,13 @@ export async function fetchDigalertTicketBundle(
   }
 
   const polygon = ringToGeoJson(ring);
-  const timestamp = Date.now();
-  let payloadR2Key = '';
-
-  if (bucket) {
-    payloadR2Key = `digalert/${ticketBase}/${timestamp}.json`;
-    await bucket.put(payloadR2Key, JSON.stringify(bundle), {
-      httpMetadata: { contentType: 'application/json' },
-    });
-  }
 
   const polygons: PolygonIngestPayload[] = [
     {
       requestNumber: bundle.requestNumber,
       geojson: JSON.stringify(polygon),
       bbox: computeBbox(ring),
-      htmlR2Key: null,
+      mapHtml: null,
     },
   ];
 
@@ -53,7 +43,6 @@ export async function fetchDigalertTicketBundle(
       region: 'DA',
       ticketBase,
       payload: JSON.stringify(bundle),
-      payloadR2Key,
       polygons,
     },
   };
@@ -62,7 +51,6 @@ export async function fetchDigalertTicketBundle(
 export async function fetchDigalertTicketsBatched(
   ticketBases: string[],
   revision: string = '00A',
-  bucket?: R2Bucket,
   sessionCookies?: Record<string, string>,
 ): Promise<DigalertSyncResult[]> {
   const results: DigalertSyncResult[] = [];
@@ -70,7 +58,7 @@ export async function fetchDigalertTicketsBatched(
   for (let i = 0; i < ticketBases.length; i += SYNC_CONFIG.MAX_CONCURRENT) {
     const batch = ticketBases.slice(i, i + SYNC_CONFIG.MAX_CONCURRENT);
     const batchResults = await Promise.all(
-      batch.map((ticketBase) => fetchDigalertTicketBundle(ticketBase, revision, bucket, sessionCookies)),
+      batch.map((ticketBase) => fetchDigalertTicketBundle(ticketBase, revision, sessionCookies)),
     );
     results.push(...batchResults);
 
