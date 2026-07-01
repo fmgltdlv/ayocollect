@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MapContainer, Polygon, TileLayer } from 'react-leaflet';
-import { fetchOverlaps, fetchTicketDetail, type OverlapRow } from '../api';
+import { fetchOverlaps, fetchTicketDetail, REGION_LABELS, type OverlapRow } from '../api';
 
 type MapPolygon = {
   ticketBase: string;
+  region: string;
   geojson: string;
 };
 
@@ -16,17 +17,23 @@ export default function OverlapsPage() {
     fetchOverlaps()
       .then(async (data) => {
         setOverlaps(data.overlaps);
-        const bases = new Set<string>();
+        const tickets = new Map<string, { region: string; ticketBase: string }>();
         for (const o of data.overlaps.slice(0, 10)) {
-          bases.add(o.ticket_base_a);
-          bases.add(o.ticket_base_b);
+          tickets.set(`${o.region_a}:${o.ticket_base_a}`, {
+            region: o.region_a,
+            ticketBase: o.ticket_base_a,
+          });
+          tickets.set(`${o.region_b}:${o.ticket_base_b}`, {
+            region: o.region_b,
+            ticketBase: o.ticket_base_b,
+          });
         }
         const loaded: MapPolygon[] = [];
-        for (const base of bases) {
+        for (const { region, ticketBase } of tickets.values()) {
           try {
-            const detail = await fetchTicketDetail(base);
+            const detail = await fetchTicketDetail(region, ticketBase);
             for (const p of detail.polygons) {
-              loaded.push({ ticketBase: base, geojson: p.geojson });
+              loaded.push({ ticketBase, region, geojson: p.geojson });
             }
           } catch {
             // skip missing tickets
@@ -59,9 +66,13 @@ export default function OverlapsPage() {
           </thead>
           <tbody>
             {overlaps.map((o) => (
-              <tr key={`${o.ticket_base_a}-${o.ticket_base_b}`}>
-                <td>{o.ticket_base_a}</td>
-                <td>{o.ticket_base_b}</td>
+              <tr key={`${o.region_a}:${o.ticket_base_a}-${o.region_b}:${o.ticket_base_b}`}>
+                <td>
+                  {REGION_LABELS[o.region_a] ?? o.region_a}: {o.ticket_base_a}
+                </td>
+                <td>
+                  {REGION_LABELS[o.region_b] ?? o.region_b}: {o.ticket_base_b}
+                </td>
                 <td>{Math.round(o.overlap_area_sqm)}</td>
               </tr>
             ))}
@@ -75,7 +86,7 @@ export default function OverlapsPage() {
           {polygons.map((p, idx) => {
             const geo = JSON.parse(p.geojson) as { coordinates: number[][][] };
             const positions = geo.coordinates[0].map(([lon, lat]) => [lat, lon] as [number, number]);
-            return <Polygon key={`${p.ticketBase}-${idx}`} positions={positions} />;
+            return <Polygon key={`${p.region}:${p.ticketBase}-${idx}`} positions={positions} />;
           })}
         </MapContainer>
       </div>

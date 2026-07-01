@@ -2,10 +2,13 @@ import booleanIntersects from '@turf/boolean-intersects';
 import intersect from '@turf/intersect';
 import area from '@turf/area';
 import { polygon as turfPolygon } from '@turf/helpers';
+import type { TicketRegion } from '@ayocollect/db';
+import { TICKET_LIST_UNION_SQL } from '@ayocollect/db';
 import type { Env } from './env';
 
 type PolygonRow = {
   request_number: string;
+  region: TicketRegion;
   ticket_base: string;
   geojson: string;
   bbox_min_lat: number;
@@ -31,18 +34,27 @@ function passesOrgFilter(createdBy: string | null, allowlist: string | undefined
   return allowed.includes(createdBy.toLowerCase());
 }
 
-function normalizePair(a: string, b: string): [string, string] {
-  return a < b ? [a, b] : [b, a];
+function normalizePair(
+  regionA: TicketRegion,
+  ticketBaseA: string,
+  regionB: TicketRegion,
+  ticketBaseB: string,
+): [TicketRegion, string, TicketRegion, string] {
+  const left = `${regionA}:${ticketBaseA}`;
+  const right = `${regionB}:${ticketBaseB}`;
+  return left < right
+    ? [regionA, ticketBaseA, regionB, ticketBaseB]
+    : [regionB, ticketBaseB, regionA, ticketBaseA];
 }
 
 export async function runOverlapScan(env: Env): Promise<void> {
   const rows = await env.DB.prepare(
-    `SELECT tp.request_number, tp.ticket_base, tp.geojson,
+    `SELECT tp.request_number, tp.region, tp.ticket_base, tp.geojson,
             tp.bbox_min_lat, tp.bbox_max_lat, tp.bbox_min_lon, tp.bbox_max_lon,
             tb.created_by
      FROM ticket_polygons tp
      JOIN ticket_revisions tr ON tr.request_number = tp.request_number AND tr.is_current = 1
-     JOIN ticket_bases tb ON tb.ticket_base = tp.ticket_base`,
+     JOIN (${TICKET_LIST_UNION_SQL}) tb ON tb.ticket_base = tp.ticket_base AND tb.region = tp.region`,
   ).all<PolygonRow>();
 
   const polygons = (rows.results ?? []).filter((p) =>
@@ -55,7 +67,7 @@ export async function runOverlapScan(env: Env): Promise<void> {
     for (let j = i + 1; j < polygons.length; j++) {
       const a = polygons[i]!;
       const b = polygons[j]!;
-      if (a.ticket_base === b.ticket_base) continue;
+      if (a.region === b.region && a.ticket_base === b.ticket_base) continue;
       if (!bboxesOverlap(a, b)) continue;
 
       try {
@@ -74,22 +86,31 @@ export async function runOverlapScan(env: Env): Promise<void> {
         });
 
         const overlapArea = intersection ? area(intersection) : 0;
-        const [ticketBaseA, ticketBaseB] = normalizePair(a.ticket_base, b.ticket_base);
+        const [regionA, ticketBaseA, regionB, ticketBaseB] = normalizePair(
+          a.region,
+          a.ticket_base,
+          b.region,
+          b.ticket_base,
+        );
 
         await env.DB.prepare(
           `INSERT INTO polygon_overlaps (
-            ticket_base_a, ticket_base_b, request_number_a, request_number_b, overlap_area_sqm
-          ) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(ticket_base_a, ticket_base_b) DO UPDATE SET
+            region_a, ticket_base_a, region_b, ticket_base_b,
+            request_number_a, request_number_b, overlap_area_sqm
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(region_a, ticket_base_a, region_b, ticket_base_b) DO UPDATE SET
             request_number_a = excluded.request_number_a,
             request_number_b = excluded.request_number_b,
             overlap_area_sqm = excluded.overlap_area_sqm,
             detected_at = datetime('now')`,
         )
-          .bind(ticketBaseA, ticketBaseB, a.request_number, b.request_number, overlapArea)
+          .bind(regionA, ticketBaseA, regionB, ticketBaseB, a.request_number, b.request_number, overlapArea)
           .run();
       } catch (err) {
-        console.error(`Overlap check failed ${a.ticket_base} vs ${b.ticket_base}:`, err);
+        console.error(
+          `Overlap check failed ${a.region}:${a.ticket_base} vs ${b.region}:${b.ticket_base}:`,
+          err,
+        );
       }
     }
   }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchTickets, type TicketRow } from '../api';
+import { fetchTickets, REGION_LABELS, type TicketRow } from '../api';
 
 export default function TicketsPage() {
   const [q, setQ] = useState('');
@@ -30,6 +30,7 @@ export default function TicketsPage() {
       <table>
         <thead>
           <tr>
+            <th>System</th>
             <th>Ticket</th>
             <th>Created by</th>
             <th>Address</th>
@@ -38,9 +39,10 @@ export default function TicketsPage() {
         </thead>
         <tbody>
           {tickets.map((t) => (
-            <tr key={t.ticket_base}>
+            <tr key={`${t.region}:${t.ticket_base}`}>
+              <td>{REGION_LABELS[t.region] ?? t.region}</td>
               <td>
-                <Link to={`/tickets/${t.ticket_base}`}>{t.ticket_base}</Link>
+                <Link to={`/tickets/${t.region}/${t.ticket_base}`}>{t.ticket_base}</Link>
               </td>
               <td>{t.created_by ?? '—'}</td>
               <td>{t.address ?? '—'}</td>

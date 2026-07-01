@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { fetchTicketDetail, type TicketDetail } from '../api';
+import { fetchTicketDetail, REGION_LABELS, type TicketDetail } from '../api';
 
 export default function TicketDetailPage() {
-  const { ticketBase } = useParams();
+  const { region, ticketBase } = useParams();
   const [detail, setDetail] = useState<TicketDetail | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!ticketBase) return;
-    fetchTicketDetail(ticketBase)
+    if (!region || !ticketBase) return;
+    fetchTicketDetail(region, ticketBase)
       .then(setDetail)
       .catch((err) => setError(err.message));
-  }, [ticketBase]);
+  }, [region, ticketBase]);
 
   if (error) return <p className="error">{error}</p>;
   if (!detail) return <p>Loading…</p>;
@@ -26,7 +26,10 @@ export default function TicketDetailPage() {
       <p><Link to="/tickets">← Back to tickets</Link></p>
       <div className="card">
         <h2>{detail.ticket.ticket_base}</h2>
-        <p>{detail.ticket.latest_request_number} · {detail.ticket.created_by ?? 'Unknown excavator'}</p>
+        <p>
+          {REGION_LABELS[detail.ticket.region] ?? detail.ticket.region} ·{' '}
+          {detail.ticket.latest_request_number} · {detail.ticket.created_by ?? 'Unknown excavator'}
+        </p>
       </div>
 
       <div className="card">

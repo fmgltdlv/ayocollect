@@ -37,7 +37,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<OverviewPage />} />
           <Route path="/tickets" element={<TicketsPage />} />
-          <Route path="/tickets/:ticketBase" element={<TicketDetailPage />} />
+          <Route path="/tickets/:region/:ticketBase" element={<TicketDetailPage />} />
           <Route path="/utilities" element={<UtilitiesPage />} />
           <Route path="/overlaps" element={<OverlapsPage />} />
           <Route path="/backfill" element={<BackfillPage />} />

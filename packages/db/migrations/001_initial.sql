@@ -1,8 +1,29 @@
 -- ayocollect D1 initial schema
 
-CREATE TABLE ticket_bases (
+CREATE TABLE usan_nv_tickets (
   ticket_base           TEXT PRIMARY KEY,
-  state                 TEXT NOT NULL CHECK (state IN ('CA', 'NV', 'DA')),
+  created_by            TEXT,
+  latest_request_number TEXT,
+  latest_revision       INTEGER NOT NULL DEFAULT 0,
+  first_seen_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  last_refreshed_at     TEXT,
+  refresh_priority      TEXT NOT NULL DEFAULT 'active'
+                          CHECK (refresh_priority IN ('active', 'archived'))
+);
+
+CREATE TABLE usan_ca_tickets (
+  ticket_base           TEXT PRIMARY KEY,
+  created_by            TEXT,
+  latest_request_number TEXT,
+  latest_revision       INTEGER NOT NULL DEFAULT 0,
+  first_seen_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  last_refreshed_at     TEXT,
+  refresh_priority      TEXT NOT NULL DEFAULT 'active'
+                          CHECK (refresh_priority IN ('active', 'archived'))
+);
+
+CREATE TABLE digalert_tickets (
+  ticket_base           TEXT PRIMARY KEY,
   created_by            TEXT,
   latest_request_number TEXT,
   latest_revision       INTEGER NOT NULL DEFAULT 0,
@@ -14,7 +35,8 @@ CREATE TABLE ticket_bases (
 
 CREATE TABLE ticket_revisions (
   request_number        TEXT PRIMARY KEY,
-  ticket_base           TEXT NOT NULL REFERENCES ticket_bases(ticket_base),
+  region                TEXT NOT NULL CHECK (region IN ('CA', 'NV', 'DA')),
+  ticket_base           TEXT NOT NULL,
   revision              INTEGER NOT NULL,
   job_start_at          TEXT,
   job_start_display     TEXT,
@@ -32,11 +54,11 @@ CREATE TABLE ticket_revisions (
   is_current            INTEGER NOT NULL DEFAULT 0,
   first_seen_at         TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (ticket_base, revision)
+  UNIQUE (region, ticket_base, revision)
 );
 
-CREATE INDEX idx_revisions_base ON ticket_revisions(ticket_base);
-CREATE INDEX idx_revisions_current ON ticket_revisions(ticket_base, is_current);
+CREATE INDEX idx_revisions_base ON ticket_revisions(region, ticket_base);
+CREATE INDEX idx_revisions_current ON ticket_revisions(region, ticket_base, is_current);
 
 CREATE TABLE utility_stations (
   station_code          TEXT PRIMARY KEY,
@@ -97,7 +119,8 @@ INSERT INTO response_code_catalog (response_code, category, description) VALUES
 
 CREATE TABLE posr_fetches (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticket_base           TEXT NOT NULL REFERENCES ticket_bases(ticket_base),
+  region                TEXT NOT NULL CHECK (region IN ('CA', 'NV', 'DA')),
+  ticket_base           TEXT NOT NULL,
   trail_id              TEXT,
   is_successful         INTEGER NOT NULL,
   validation_errors     TEXT,
@@ -105,10 +128,11 @@ CREATE TABLE posr_fetches (
   fetched_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_fetches_base ON posr_fetches(ticket_base, fetched_at);
+CREATE INDEX idx_fetches_base ON posr_fetches(region, ticket_base, fetched_at);
 
 CREATE TABLE ticket_polygons (
   request_number        TEXT PRIMARY KEY REFERENCES ticket_revisions(request_number),
+  region                TEXT NOT NULL CHECK (region IN ('CA', 'NV', 'DA')),
   ticket_base           TEXT NOT NULL,
   geojson               TEXT NOT NULL,
   bbox_min_lat          REAL,
@@ -119,17 +143,19 @@ CREATE TABLE ticket_polygons (
   updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_polygons_base ON ticket_polygons(ticket_base);
+CREATE INDEX idx_polygons_base ON ticket_polygons(region, ticket_base);
 
 CREATE TABLE polygon_overlaps (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  region_a              TEXT NOT NULL CHECK (region_a IN ('CA', 'NV', 'DA')),
   ticket_base_a         TEXT NOT NULL,
+  region_b              TEXT NOT NULL CHECK (region_b IN ('CA', 'NV', 'DA')),
   ticket_base_b         TEXT NOT NULL,
   request_number_a      TEXT,
   request_number_b      TEXT,
   overlap_area_sqm      REAL,
   detected_at           TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (ticket_base_a, ticket_base_b)
+  UNIQUE (region_a, ticket_base_a, region_b, ticket_base_b)
 );
 
 CREATE TABLE sync_state (

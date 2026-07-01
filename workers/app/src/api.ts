@@ -1,4 +1,5 @@
 import { ALL_SYNC_REGIONS, expandDateRange, formatTodayPacific, isValidDateString, processNextBackfill } from '@ayocollect/posr';
+import { isTicketRegion, TICKET_LIST_UNION_SQL, ticketTableForRegion } from '@ayocollect/db';
 import type { Env } from './env';
 
 function corsHeaders(): HeadersInit {
@@ -164,22 +165,30 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
 
     if (path === '/api/tickets' && request.method === 'GET') {
       const q = url.searchParams.get('q') ?? '';
+      const regionFilter = url.searchParams.get('region')?.trim().toUpperCase() ?? '';
       const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10), 200);
       const offset = parseInt(url.searchParams.get('offset') ?? '0', 10);
+
+      const baseSql = isTicketRegion(regionFilter)
+        ? `SELECT ticket_base, '${regionFilter}' AS region, created_by, latest_request_number, latest_revision, first_seen_at, last_refreshed_at, refresh_priority
+           FROM ${ticketTableForRegion(regionFilter)}`
+        : `SELECT * FROM (${TICKET_LIST_UNION_SQL})`;
 
       const stmt = q
         ? env.DB.prepare(
             `SELECT tb.*, tr.address, tr.job_start_at
-             FROM ticket_bases tb
-             LEFT JOIN ticket_revisions tr ON tr.request_number = tb.latest_request_number
+             FROM (${baseSql}) tb
+             LEFT JOIN ticket_revisions tr
+               ON tr.request_number = tb.latest_request_number AND tr.region = tb.region
              WHERE tb.ticket_base LIKE ? OR tb.created_by LIKE ? OR tr.address LIKE ?
              ORDER BY tb.last_refreshed_at DESC
              LIMIT ? OFFSET ?`,
           ).bind(`%${q}%`, `%${q}%`, `%${q}%`, limit, offset)
         : env.DB.prepare(
             `SELECT tb.*, tr.address, tr.job_start_at
-             FROM ticket_bases tb
-             LEFT JOIN ticket_revisions tr ON tr.request_number = tb.latest_request_number
+             FROM (${baseSql}) tb
+             LEFT JOIN ticket_revisions tr
+               ON tr.request_number = tb.latest_request_number AND tr.region = tb.region
              ORDER BY tb.last_refreshed_at DESC
              LIMIT ? OFFSET ?`,
           ).bind(limit, offset);
@@ -189,40 +198,47 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
     }
 
     if (path.startsWith('/api/tickets/') && request.method === 'GET') {
-      const ticketBase = path.split('/').pop()!;
-      const base = await env.DB.prepare(`SELECT * FROM ticket_bases WHERE ticket_base = ?`)
-        .bind(ticketBase)
+      const parts = path.split('/').filter(Boolean);
+      const region = parts[2]?.toUpperCase();
+      const ticketBase = parts[3];
+      if (!isTicketRegion(region) || !ticketBase) {
+        return json({ error: 'Use /api/tickets/:region/:ticketBase with region NV, CA, or DA' }, 400);
+      }
+
+      const ticketTable = ticketTableForRegion(region);
+      const base = await env.DB.prepare(`SELECT *, ? AS region FROM ${ticketTable} WHERE ticket_base = ?`)
+        .bind(region, ticketBase)
         .first();
       if (!base) return json({ error: 'Not found' }, 404);
 
       const revisions = await env.DB.prepare(
-        `SELECT * FROM ticket_revisions WHERE ticket_base = ? ORDER BY revision`,
+        `SELECT * FROM ticket_revisions WHERE region = ? AND ticket_base = ? ORDER BY revision`,
       )
-        .bind(ticketBase)
+        .bind(region, ticketBase)
         .all();
 
       const events = await env.DB.prepare(
         `SELECT re.* FROM response_events re
          JOIN ticket_revisions tr ON tr.request_number = re.request_number
-         WHERE tr.ticket_base = ?
+         WHERE tr.region = ? AND tr.ticket_base = ?
          ORDER BY re.response_date`,
       )
-        .bind(ticketBase)
+        .bind(region, ticketBase)
         .all();
 
       const timeliness = await env.DB.prepare(
         `SELECT st.* FROM station_timeliness st
          JOIN ticket_revisions tr ON tr.request_number = st.request_number
-         WHERE tr.ticket_base = ?`,
+         WHERE tr.region = ? AND tr.ticket_base = ?`,
       )
-        .bind(ticketBase)
+        .bind(region, ticketBase)
         .all();
 
       const polygons = await env.DB.prepare(
         `SELECT request_number, geojson, bbox_min_lat, bbox_max_lat, bbox_min_lon, bbox_max_lon
-         FROM ticket_polygons WHERE ticket_base = ?`,
+         FROM ticket_polygons WHERE region = ? AND ticket_base = ?`,
       )
-        .bind(ticketBase)
+        .bind(region, ticketBase)
         .all();
 
       return json({
@@ -271,8 +287,10 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
                 ta.created_by as created_by_a,
                 tb.created_by as created_by_b
          FROM polygon_overlaps po
-         LEFT JOIN ticket_bases ta ON ta.ticket_base = po.ticket_base_a
-         LEFT JOIN ticket_bases tb ON tb.ticket_base = po.ticket_base_b
+         LEFT JOIN (${TICKET_LIST_UNION_SQL}) ta
+           ON ta.ticket_base = po.ticket_base_a AND ta.region = po.region_a
+         LEFT JOIN (${TICKET_LIST_UNION_SQL}) tb
+           ON tb.ticket_base = po.ticket_base_b AND tb.region = po.region_b
          ORDER BY overlap_area_sqm DESC
          LIMIT 100`,
       ).all();

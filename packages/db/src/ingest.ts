@@ -3,6 +3,7 @@ import type {
   PosrSearchToolResponse,
   TicketRegion,
 } from './types';
+import { ticketTableForRegion } from './tables';
 
 export function parseRequestNumber(requestNumber: string): {
   ticketBase: string;
@@ -44,26 +45,27 @@ export async function upsertPosrPayload(
   if (!ticket?.ticketNumber) return;
 
   const { ticketBase, revision } = parseRequestNumber(ticket.ticketNumber);
+  const ticketTable = ticketTableForRegion(region);
 
   await db
     .prepare(
-      `INSERT INTO ticket_bases (ticket_base, state, created_by, latest_request_number, latest_revision, last_refreshed_at)
-       VALUES (?, ?, ?, ?, ?, datetime('now'))
+      `INSERT INTO ${ticketTable} (ticket_base, created_by, latest_request_number, latest_revision, last_refreshed_at)
+       VALUES (?, ?, ?, ?, datetime('now'))
        ON CONFLICT(ticket_base) DO UPDATE SET
-         created_by = COALESCE(excluded.created_by, ticket_bases.created_by),
+         created_by = COALESCE(excluded.created_by, ${ticketTable}.created_by),
          latest_request_number = excluded.latest_request_number,
          latest_revision = excluded.latest_revision,
          last_refreshed_at = datetime('now')`,
     )
-    .bind(ticketBase, region, ticket.createdBy ?? null, ticket.ticketNumber, revision)
+    .bind(ticketBase, ticket.createdBy ?? null, ticket.ticketNumber, revision)
     .run();
 
   await db
-    .prepare(`UPDATE ticket_revisions SET is_current = 0 WHERE ticket_base = ?`)
-    .bind(ticketBase)
+    .prepare(`UPDATE ticket_revisions SET is_current = 0 WHERE region = ? AND ticket_base = ?`)
+    .bind(region, ticketBase)
     .run();
 
-  await upsertRevision(db, ticket.ticketNumber, ticketBase, revision, ticket, true);
+  await upsertRevision(db, region, ticket.ticketNumber, ticketBase, revision, ticket, true);
 
   const history = ticket.ticketHistory ?? [];
   const revisionNumbers = new Set<string>([ticket.ticketNumber]);
@@ -74,7 +76,7 @@ export async function upsertPosrPayload(
   for (const reqNum of revisionNumbers) {
     if (reqNum === ticket.ticketNumber) continue;
     const parsed = parseRequestNumber(reqNum);
-    await ensureRevisionExists(db, reqNum, parsed.ticketBase, parsed.revision);
+    await ensureRevisionExists(db, region, reqNum, parsed.ticketBase, parsed.revision);
   }
 
   for (const entry of history) {
@@ -157,10 +159,11 @@ export async function upsertPosrPayload(
 
   await db
     .prepare(
-      `INSERT INTO posr_fetches (ticket_base, trail_id, is_successful, validation_errors, raw_payload)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO posr_fetches (region, ticket_base, trail_id, is_successful, validation_errors, raw_payload)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .bind(
+      region,
       ticketBase,
       payload.trailId ?? null,
       payload.isSuccessful ? 1 : 0,
@@ -169,7 +172,7 @@ export async function upsertPosrPayload(
     )
     .run();
 
-  await recomputeTimeliness(db, ticketBase);
+  await recomputeTimeliness(db, region, ticketBase);
 }
 
 export async function upsertDigalertPayload(
@@ -177,6 +180,8 @@ export async function upsertDigalertPayload(
   bundle: DigalertTicketBundle,
   rawPayload?: string,
 ): Promise<void> {
+  const region: TicketRegion = 'DA';
+  const ticketTable = ticketTableForRegion(region);
   const ticketData = bundle.ticketData;
   const ticketBase = bundle.ticket;
   const requestNumber = bundle.requestNumber;
@@ -191,10 +196,10 @@ export async function upsertDigalertPayload(
 
   await db
     .prepare(
-      `INSERT INTO ticket_bases (ticket_base, state, created_by, latest_request_number, latest_revision, last_refreshed_at)
-       VALUES (?, 'DA', ?, ?, ?, datetime('now'))
+      `INSERT INTO ${ticketTable} (ticket_base, created_by, latest_request_number, latest_revision, last_refreshed_at)
+       VALUES (?, ?, ?, ?, datetime('now'))
        ON CONFLICT(ticket_base) DO UPDATE SET
-         created_by = COALESCE(excluded.created_by, ticket_bases.created_by),
+         created_by = COALESCE(excluded.created_by, ${ticketTable}.created_by),
          latest_request_number = excluded.latest_request_number,
          latest_revision = excluded.latest_revision,
          last_refreshed_at = datetime('now')`,
@@ -203,18 +208,18 @@ export async function upsertDigalertPayload(
     .run();
 
   await db
-    .prepare(`UPDATE ticket_revisions SET is_current = 0 WHERE ticket_base = ?`)
-    .bind(ticketBase)
+    .prepare(`UPDATE ticket_revisions SET is_current = 0 WHERE region = ? AND ticket_base = ?`)
+    .bind(region, ticketBase)
     .run();
 
   await db
     .prepare(
       `INSERT INTO ticket_revisions (
-        request_number, ticket_base, revision,
+        request_number, region, ticket_base, revision,
         job_start_at, job_start_display, work_expiration_at, work_expiration_display,
         address, map_link, work_type, work_activity, excavation_method,
         street_sidewalk_or_parkstrip, additional_remarks, is_cancelled, job_status, is_current, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, 0, ?, 0, ?, 1, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, 0, ?, 0, ?, 1, datetime('now'))
       ON CONFLICT(request_number) DO UPDATE SET
         job_start_at = excluded.job_start_at,
         work_expiration_at = excluded.work_expiration_at,
@@ -227,6 +232,7 @@ export async function upsertDigalertPayload(
     )
     .bind(
       requestNumber,
+      region,
       ticketBase,
       revision,
       typeof ticketData.work_date === 'string' ? ticketData.work_date : null,
@@ -321,32 +327,34 @@ export async function upsertDigalertPayload(
 
   await db
     .prepare(
-      `INSERT INTO posr_fetches (ticket_base, trail_id, is_successful, validation_errors, raw_payload)
-       VALUES (?, NULL, 1, NULL, ?)`,
+      `INSERT INTO posr_fetches (region, ticket_base, trail_id, is_successful, validation_errors, raw_payload)
+       VALUES (?, ?, NULL, 1, NULL, ?)`,
     )
-    .bind(ticketBase, rawPayload ?? null)
+    .bind(region, ticketBase, rawPayload ?? null)
     .run();
 
-  await recomputeTimeliness(db, ticketBase);
+  await recomputeTimeliness(db, region, ticketBase);
 }
 
 async function ensureRevisionExists(
   db: D1Database,
+  region: TicketRegion,
   requestNumber: string,
   ticketBase: string,
   revision: number,
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT OR IGNORE INTO ticket_revisions (request_number, ticket_base, revision, is_current)
-       VALUES (?, ?, ?, 0)`,
+      `INSERT OR IGNORE INTO ticket_revisions (request_number, region, ticket_base, revision, is_current)
+       VALUES (?, ?, ?, ?, 0)`,
     )
-    .bind(requestNumber, ticketBase, revision)
+    .bind(requestNumber, region, ticketBase, revision)
     .run();
 }
 
 async function upsertRevision(
   db: D1Database,
+  region: TicketRegion,
   requestNumber: string,
   ticketBase: string,
   revision: number,
@@ -356,11 +364,11 @@ async function upsertRevision(
   await db
     .prepare(
       `INSERT INTO ticket_revisions (
-        request_number, ticket_base, revision,
+        request_number, region, ticket_base, revision,
         job_start_at, job_start_display, work_expiration_at, work_expiration_display,
         address, map_link, work_type, work_activity, excavation_method,
         street_sidewalk_or_parkstrip, additional_remarks, is_cancelled, job_status, is_current, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(request_number) DO UPDATE SET
         job_start_at = excluded.job_start_at,
         job_start_display = excluded.job_start_display,
@@ -380,6 +388,7 @@ async function upsertRevision(
     )
     .bind(
       requestNumber,
+      region,
       ticketBase,
       revision,
       ticket.jobStartDate ?? null,
@@ -402,6 +411,7 @@ async function upsertRevision(
 
 export async function upsertPolygon(
   db: D1Database,
+  region: TicketRegion,
   requestNumber: string,
   ticketBase: string,
   geojson: string,
@@ -411,10 +421,11 @@ export async function upsertPolygon(
   await db
     .prepare(
       `INSERT INTO ticket_polygons (
-        request_number, ticket_base, geojson,
+        request_number, region, ticket_base, geojson,
         bbox_min_lat, bbox_max_lat, bbox_min_lon, bbox_max_lon, map_html, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(request_number) DO UPDATE SET
+        region = excluded.region,
         geojson = excluded.geojson,
         bbox_min_lat = excluded.bbox_min_lat,
         bbox_max_lat = excluded.bbox_max_lat,
@@ -425,6 +436,7 @@ export async function upsertPolygon(
     )
     .bind(
       requestNumber,
+      region,
       ticketBase,
       geojson,
       bbox?.minLat ?? null,
@@ -436,14 +448,20 @@ export async function upsertPolygon(
     .run();
 }
 
-export async function recomputeTimeliness(db: D1Database, ticketBase?: string): Promise<void> {
-  if (ticketBase) {
+export async function recomputeTimeliness(
+  db: D1Database,
+  region?: TicketRegion,
+  ticketBase?: string,
+): Promise<void> {
+  if (region && ticketBase) {
     await db
       .prepare(
         `DELETE FROM station_timeliness
-         WHERE request_number IN (SELECT request_number FROM ticket_revisions WHERE ticket_base = ?)`,
+         WHERE request_number IN (
+           SELECT request_number FROM ticket_revisions WHERE region = ? AND ticket_base = ?
+         )`,
       )
-      .bind(ticketBase)
+      .bind(region, ticketBase)
       .run();
 
     await db
@@ -457,10 +475,10 @@ export async function recomputeTimeliness(db: D1Database, ticketBase?: string): 
         FROM v_station_timeliness vst
         WHERE EXISTS (
           SELECT 1 FROM ticket_revisions tr
-          WHERE tr.request_number = vst.request_number AND tr.ticket_base = ?
+          WHERE tr.request_number = vst.request_number AND tr.region = ? AND tr.ticket_base = ?
         )`,
       )
-      .bind(ticketBase)
+      .bind(region, ticketBase)
       .run();
   } else {
     await db.prepare(`DELETE FROM station_timeliness`).run();
@@ -477,4 +495,3 @@ export async function recomputeTimeliness(db: D1Database, ticketBase?: string): 
       .run();
   }
 }
-

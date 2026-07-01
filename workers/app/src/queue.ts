@@ -24,6 +24,7 @@ async function handleIngestTicket(
     const { ticketBase } = parseRequestNumber(polygon.requestNumber);
     await upsertPolygon(
       env.DB,
+      message.region,
       polygon.requestNumber,
       ticketBase,
       polygon.geojson,

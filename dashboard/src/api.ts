@@ -24,8 +24,8 @@ export const fetchUtilities = () =>
 export const fetchTickets = (q = '', limit = 50) =>
   api<{ tickets: TicketRow[] }>(`/api/tickets?q=${encodeURIComponent(q)}&limit=${limit}`);
 
-export const fetchTicketDetail = (ticketBase: string) =>
-  api<TicketDetail>(`/api/tickets/${ticketBase}`);
+export const fetchTicketDetail = (region: string, ticketBase: string) =>
+  api<TicketDetail>(`/api/tickets/${region}/${ticketBase}`);
 
 export const fetchOverlaps = () =>
   api<{ overlaps: OverlapRow[] }>('/api/overlaps');
@@ -38,6 +38,12 @@ export const fetchBackfillRuns = () =>
 
 export const fetchBackfillQueueStatus = () =>
   api<BackfillQueueStatus>('/api/sync/backfill/queue-status');
+
+export const REGION_LABELS: Record<string, string> = {
+  NV: 'USAN NV',
+  CA: 'USAN CA',
+  DA: 'DigAlert',
+};
 
 export const BACKFILL_REGIONS = [
   { id: 'NV', label: 'USAN Nevada' },
@@ -60,7 +66,7 @@ export const startBackfill = (body: {
 
 export type TicketRow = {
   ticket_base: string;
-  state: string;
+  region: string;
   created_by: string | null;
   latest_request_number: string;
   address?: string;
@@ -78,7 +84,9 @@ export type UtilityMetric = {
 };
 
 export type OverlapRow = {
+  region_a: string;
   ticket_base_a: string;
+  region_b: string;
   ticket_base_b: string;
   overlap_area_sqm: number;
   created_by_a?: string;
