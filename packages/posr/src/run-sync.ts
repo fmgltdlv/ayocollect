@@ -10,7 +10,6 @@ import { fetchTicketsBatched, passesCreatedByFilter } from './sync';
 
 export type RunSyncEnv = {
   DB: D1Database;
-  BUCKET?: R2Bucket;
   QUEUE: Queue<QueueMessage>;
   ORG_CREATED_BY_FILTER?: string;
   DIGALERT_SESSION_COOKIES?: string;
@@ -48,7 +47,7 @@ async function syncUsanRegion(
   let failed = 0;
 
   const ticketBases = await enumerateTicketsForDate({ targetDate, region });
-  const results = await fetchTicketsBatched(ticketBases, region, env.BUCKET);
+  const results = await fetchTicketsBatched(ticketBases, region);
 
   for (const result of results) {
     if (!result.success || !result.message) {
@@ -84,7 +83,6 @@ async function syncDigalertRegion(
   const results = await fetchDigalertTicketsBatched(
     ticketBases,
     '00A',
-    env.BUCKET,
     sessionCookies,
   );
 

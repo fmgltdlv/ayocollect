@@ -101,7 +101,7 @@ CREATE TABLE posr_fetches (
   trail_id              TEXT,
   is_successful         INTEGER NOT NULL,
   validation_errors     TEXT,
-  raw_r2_key            TEXT,
+  raw_payload           TEXT,
   fetched_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -115,7 +115,7 @@ CREATE TABLE ticket_polygons (
   bbox_max_lat          REAL,
   bbox_min_lon          REAL,
   bbox_max_lon          REAL,
-  gml_r2_key            TEXT,
+  map_html              TEXT,
   updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
