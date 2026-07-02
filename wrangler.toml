@@ -1,8 +1,0 @@
-name = "ayocollect"
-compatibility_date = "2025-02-04"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "ayocollect-db"
-database_id = "d1d567d9-a127-43f4-be24-1dd370928b48"
-migrations_dir = "packages/db/migrations"
