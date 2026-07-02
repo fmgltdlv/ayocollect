@@ -2,15 +2,24 @@
 
 811 ticket analytics for excavators. Fetches ticket detail and dig-site polygons from **USAN** (Northern CA + Nevada) and **DigAlert** (Southern CA), then scores utility response timeliness.
 
-The app is a single Cloudflare Worker that serves the API, static frontend, and hourly cron jobs. Data is stored in D1.
+The app runs as a **Cloudflare Worker API** plus a **Cloudflare Pages** frontend. The Worker handles REST routes, ticket fetch jobs, and hourly cron; the UI is static assets deployed separately so frontend changes do not require a backend redeploy. Data is stored in D1.
 
 ## Architecture
 
 | Component | Location | Role |
 |---|---|---|
 | Worker API | `backend/` | REST API, ticket fetch jobs, scheduled sync |
-| Frontend | `frontend/` | Static UI served by the Worker via `[assets]` |
+| Frontend | `frontend/` | Static UI on Cloudflare Pages (`ayocollect-ui`) |
 | Database | Cloudflare D1 | Ticket data, fetch jobs, settings |
+
+**Production URLs**
+
+| Service | URL |
+|---|---|
+| UI | https://ayocollect-ui.pages.dev |
+| API | https://ayocollect.thefieldmappinggroup.workers.dev/api |
+
+The frontend calls the API via `frontend/config.js` (`window.AYO_API_BASE`).
 
 ## Prerequisites
 
@@ -20,6 +29,8 @@ The app is a single Cloudflare Worker that serves the API, static frontend, and 
 
 ## Local development
 
+**Backend (API only):**
+
 ```bash
 cd backend
 npm install
@@ -27,11 +38,37 @@ npm run db:migrate:local
 npm run dev
 ```
 
-Open the URL Wrangler prints (typically `http://127.0.0.1:8787`). The Worker serves both the frontend and `/api/*` routes.
+API at `http://127.0.0.1:8787` (typically).
+
+**Frontend (optional — run UI separately):**
+
+```bash
+cp frontend/config.local.js.example frontend/config.local.js
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:8788`. `config.local.js` points the UI at the local API.
 
 ## Deploy to Cloudflare
 
-You can deploy from the **Cloudflare dashboard** (Git-connected Workers Builds) or from your machine with **Wrangler CLI**. Both deploy the Worker and frontend together — there is no separate frontend deploy.
+Backend and frontend deploy **independently**:
+
+```bash
+# API only (Worker + D1 + cron)
+cd backend
+npm run deploy
+
+# UI only (Pages)
+cd frontend
+npm install
+npm run deploy
+```
+
+First-time Pages setup: create the project once with `npx wrangler pages project create ayocollect-ui --production-branch=main`, then use `npm run deploy` for future UI updates.
+
+You can also deploy from the **Cloudflare dashboard** (Git-connected Workers Builds for the API). The frontend can be connected to Git separately under **Workers & Pages → ayocollect-ui**.
 
 ---
 
@@ -94,7 +131,7 @@ SELECT name FROM sqlite_master WHERE type = 'table';
 | **Build command** | `npm install && npm run deploy` |
 | **Deploy command** | *(leave empty — deploy is in the build command)* |
 
-Cloudflare reads `backend/wrangler.toml` for the D1 binding, static assets (`../frontend`), and cron trigger.
+Cloudflare reads `backend/wrangler.toml` for the D1 binding and cron trigger.
 
 5. Click **Save and Deploy** (or **Deploy**).
 
@@ -120,8 +157,10 @@ Open the workers.dev URL and test:
 
 ```
 /api/health   →  {"ok":true}
-/             →  frontend UI loads
+/             →  {"service":"ayocollect-api",...}
 ```
+
+Open the UI at **Workers & Pages → ayocollect-ui** (https://ayocollect-ui.pages.dev).
 
 #### 6. Custom domain (optional)
 
@@ -205,6 +244,15 @@ cd backend
 npm run deploy
 ```
 
+#### 6. Deploy the frontend (Pages)
+
+```bash
+cd frontend
+npm install
+npx wrangler pages project create ayocollect-ui --production-branch=main   # first time only
+npm run deploy
+```
+
 After deploy, confirm in the dashboard:
 
 1. **Workers & Pages → 811-ticket-serverless**
@@ -219,7 +267,7 @@ https://811-ticket-serverless.<your-subdomain>.workers.dev
 
 Find the exact URL under **Workers & Pages → 811-ticket-serverless → Settings → Domains & Routes → workers.dev**.
 
-#### 6. Custom domain (Dashboard, optional)
+#### 7. Custom domain (Dashboard, optional)
 
 1. **Workers & Pages → 811-ticket-serverless → Settings → Domains & Routes**
 2. Click **Add → Custom domain** (or **Add route** if using a path on an existing zone).
@@ -227,10 +275,11 @@ Find the exact URL under **Workers & Pages → 811-ticket-serverless → Setting
 
 The domain must be on a zone already in your Cloudflare account.
 
-#### 7. Verify deployment
+#### 8. Verify deployment
 
 ```
-https://811-ticket-serverless.<your-subdomain>.workers.dev/api/health
+https://ayocollect.thefieldmappinggroup.workers.dev/api/health
+https://ayocollect-ui.pages.dev
 ```
 
 Expected response:
@@ -245,10 +294,17 @@ In the dashboard, check **Workers & Pages → 811-ticket-serverless → Logs** f
 
 **Dashboard (Git-connected):** push to your connected branch — Cloudflare redeploys automatically.
 
-**CLI:**
+**CLI (backend):**
 
 ```bash
 cd backend
+npm run deploy
+```
+
+**CLI (frontend only):**
+
+```bash
+cd frontend
 npm run deploy
 ```
 
@@ -265,7 +321,8 @@ Confirm in the dashboard under **Workers & Pages → 811-ticket-serverless → D
 
 | Task | Where in Cloudflare Dashboard |
 |---|---|
-| Connect Git / redeploy | **Workers & Pages → 811-ticket-serverless → Deployments** |
+| Connect Git / redeploy API | **Workers & Pages → ayocollect → Deployments** |
+| Deploy / redeploy UI | **Workers & Pages → ayocollect-ui → Deployments** |
 | Create / view D1 database | **Storage & Databases → D1 SQL Database** |
 | Run SQL manually | **D1 → ayocollect-db → Console** |
 | View Worker URL | **Workers & Pages → 811-ticket-serverless → Settings → Domains & Routes** |
@@ -290,5 +347,5 @@ The hourly cron trigger (`0 * * * *` UTC) runs automatic fetch jobs when auto-fe
 backend/          Cloudflare Worker (Hono API + cron)
   migrations/     D1 schema migrations
   src/            Worker source
-frontend/         Static HTML/CSS/JS (served by Worker)
+frontend/         Static HTML/CSS/JS (Cloudflare Pages)
 ```

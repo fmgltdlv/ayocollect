@@ -1,6 +1,5 @@
 export type Env = {
   DB: D1Database;
-  ASSETS: Fetcher;
   DIGALERT_SESSION_COOKIES?: string;
   /** Public Worker URL for self-fetch job chaining (cron / background). */
   WORKER_URL?: string;
@@ -45,6 +44,13 @@ export const USER_AGENT =
 
 export const BATCH_SIZE = 6;
 export const FETCH_STAGGER_MS = 250; // pause between waves
+/** Skip to next day after this many consecutive ticket misses (USAN + DigAlert) */
+export const CONSECUTIVE_MISS_LIMIT = 2;
+/** Max tickets to scan per day (DigAlert counter / USAN sequence) */
+export const MAX_TICKETS_PER_DAY = 3999;
+export const DIGALERT_MAX_COUNTER = MAX_TICKETS_PER_DAY;
+export const USAN_CA_MAX_SEQ = MAX_TICKETS_PER_DAY;
+export const USAN_NV_MAX_SEQ = MAX_TICKETS_PER_DAY;
 export const SENTINEL_DATE = '1900-01-02';
 export const LATE_CODES = new Set(['888', '999']);
 export const BLOCKER_CODES = new Set(['888', '999']);

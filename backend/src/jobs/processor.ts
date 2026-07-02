@@ -2,7 +2,6 @@ import {
   fetchDigAlertRaw,
   fetchUsanPolygonWkt,
   fetchUsanPosr,
-  ticketExistsDigAlert,
   ticketExistsUsan,
 } from '../fetchers';
 import { upsertDigAlert, upsertUsan } from '../db/upsert';
@@ -18,7 +17,16 @@ import {
   type DigAlertCursor,
   type UsanCursor,
 } from '../lib/ticket-sequence';
-import { BATCH_SIZE, FETCH_STAGGER_MS, type Env, type FetchJobStatus } from '../types';
+import {
+  BATCH_SIZE,
+  CONSECUTIVE_MISS_LIMIT,
+  DIGALERT_MAX_COUNTER,
+  FETCH_STAGGER_MS,
+  USAN_CA_MAX_SEQ,
+  USAN_NV_MAX_SEQ,
+  type Env,
+  type FetchJobStatus,
+} from '../types';
 
 export type FetchJobRow = {
   id: number;
@@ -41,11 +49,16 @@ export type FetchJobRow = {
   updated_at: string;
 };
 
-/** Max runtime per Worker slice before chaining another request */
-const TIME_BUDGET_MS = 28_000;
+/** Max runtime per Worker slice — two slices + chain must fit in the 30s waitUntil limit */
+const TIME_BUDGET_MS = 12_000;
+/** Slices to run per tick before chaining to the next HTTP request */
+const SLICES_PER_TICK = 2;
+/** If a running job hasn't saved progress this long, treat auto-chain as lost */
+export const STALE_JOB_MS = 60_000;
 
 const activeAborts = new Map<number, AbortController>();
 const runningSlices = new Set<number>();
+const sliceStartedAt = new Map<number, number>();
 
 export function abortJob(jobId: number): void {
   activeAborts.get(jobId)?.abort();
@@ -172,7 +185,7 @@ function isJobDone(job: FetchJobRow): boolean {
 
 type WaveSlot = { ticket: string; seq: number; counter: number; date: string };
 
-function buildUsanWave(cursor: UsanCursor, endDate: string): WaveSlot[] {
+function buildUsanWave(cursor: UsanCursor, endDate: string, maxSeq: number): WaveSlot[] {
   const slots: WaveSlot[] = [];
   let date = cursor.date;
   let seq = cursor.seq;
@@ -180,7 +193,7 @@ function buildUsanWave(cursor: UsanCursor, endDate: string): WaveSlot[] {
     if (compareDates(date, endDate) > 0) break;
     slots.push({ ticket: formatUsanTicket(date, seq), seq, counter: seq, date });
     seq += 1;
-    if (seq > 99999) {
+    if (seq > maxSeq) {
       date = addDays(date, 1);
       seq = 1;
     }
@@ -202,7 +215,7 @@ function buildDigAlertWave(cursor: DigAlertCursor, endDate: string): WaveSlot[] 
       date,
     });
     counter += 1;
-    if (counter > 999) {
+    if (counter > DIGALERT_MAX_COUNTER) {
       date = addDays(date, 1);
       counter = 1;
     }
@@ -212,9 +225,9 @@ function buildDigAlertWave(cursor: DigAlertCursor, endDate: string): WaveSlot[] 
 
 function applyUsanWaveResults(
   cursor: UsanCursor,
-  endDate: string,
   slots: WaveSlot[],
-  existsResults: boolean[]
+  existsResults: boolean[],
+  maxSeq: number
 ): UsanCursor {
   let { date, seq, consecutiveMisses } = cursor;
 
@@ -226,7 +239,7 @@ function applyUsanWaveResults(
       consecutiveMisses = 0;
     } else {
       consecutiveMisses += 1;
-      if (consecutiveMisses >= 2) {
+      if (consecutiveMisses >= CONSECUTIVE_MISS_LIMIT) {
         date = addDays(date, 1);
         seq = 1;
         consecutiveMisses = 0;
@@ -234,7 +247,7 @@ function applyUsanWaveResults(
       }
     }
     seq = slot.seq + 1;
-    if (seq > 99999) {
+    if (seq > maxSeq) {
       date = addDays(date, 1);
       seq = 1;
       consecutiveMisses = 0;
@@ -246,7 +259,6 @@ function applyUsanWaveResults(
 
 function applyDigAlertWaveResults(
   cursor: DigAlertCursor,
-  endDate: string,
   slots: WaveSlot[],
   existsResults: boolean[]
 ): DigAlertCursor {
@@ -260,7 +272,7 @@ function applyDigAlertWaveResults(
       consecutiveMisses = 0;
     } else {
       consecutiveMisses += 1;
-      if (consecutiveMisses >= 2) {
+      if (consecutiveMisses >= CONSECUTIVE_MISS_LIMIT) {
         date = addDays(date, 1);
         counter = 1;
         consecutiveMisses = 0;
@@ -268,7 +280,7 @@ function applyDigAlertWaveResults(
       }
     }
     counter = slot.counter + 1;
-    if (counter > 999) {
+    if (counter > DIGALERT_MAX_COUNTER) {
       date = addDays(date, 1);
       counter = 1;
       consecutiveMisses = 0;
@@ -287,11 +299,12 @@ async function processUsanWave(
 ): Promise<void> {
   const cursorKey = system === 'ca' ? 'usan_ca_cursor' : 'usan_nv_cursor';
   const fetchedKey = system === 'ca' ? 'usan_ca_fetched' : 'usan_nv_fetched';
+  const maxSeq = system === 'ca' ? USAN_CA_MAX_SEQ : USAN_NV_MAX_SEQ;
   let cursor = parseUsanCursor(job[cursorKey], job.start_date);
 
   if (isUsanSystemDone(cursor, job.end_date)) return;
 
-  const slots = buildUsanWave(cursor, job.end_date);
+  const slots = buildUsanWave(cursor, job.end_date, maxSeq);
   if (!slots.length) {
     job[cursorKey] = JSON.stringify({ ...cursor, date: addDays(cursor.date, 1), seq: 1, consecutiveMisses: 0 });
     return;
@@ -320,7 +333,7 @@ async function processUsanWave(
     })
   );
 
-  cursor = applyUsanWaveResults(cursor, job.end_date, slots, existsResults);
+  cursor = applyUsanWaveResults(cursor, slots, existsResults, maxSeq);
   job[cursorKey] = JSON.stringify(cursor);
 }
 
@@ -339,19 +352,25 @@ async function processDigAlertWave(
     return;
   }
 
-  const existsResults = await Promise.all(
-    slots.map((s) => ticketExistsDigAlert(s.ticket, env, signal))
-  );
+  if (!slots.length) {
+    job.digalert_cursor = JSON.stringify({
+      date: addDays(cursor.date, 1),
+      counter: 1,
+      consecutiveMisses: 0,
+    });
+    return;
+  }
 
+  const existsResults: boolean[] = new Array(slots.length).fill(false);
   await Promise.all(
     slots.map(async (s, i) => {
-      if (!existsResults[i] || signal.aborted) return;
+      if (signal.aborted) return;
       try {
         const payload = await fetchDigAlertRaw(s.ticket, '00A', env, signal);
-        if (payload) {
-          await upsertDigAlert(db, payload);
-          job.digalert_fetched += 1;
-        }
+        if (!payload) return;
+        existsResults[i] = true;
+        await upsertDigAlert(db, payload);
+        job.digalert_fetched += 1;
       } catch (e) {
         if (signal.aborted) throw e;
         job.error_count += 1;
@@ -360,20 +379,22 @@ async function processDigAlertWave(
     })
   );
 
-  cursor = applyDigAlertWaveResults(cursor, job.end_date, slots, existsResults);
+  cursor = applyDigAlertWaveResults(cursor, slots, existsResults);
   job.digalert_cursor = JSON.stringify(cursor);
 }
 
-/** One round = up to 6 parallel fetches per enabled system (Python-style day advance). */
+/** One round = up to 6 parallel fetches per enabled system (systems run in parallel). */
 async function processOneRound(
   db: D1Database,
   job: FetchJobRow,
   env: Env,
   signal: AbortSignal
 ): Promise<void> {
-  if (job.include_digalert) await processDigAlertWave(db, job, env, signal);
-  if (job.include_usan_ca) await processUsanWave(db, job, 'ca', env, signal);
-  if (job.include_usan_nv) await processUsanWave(db, job, 'nv', env, signal);
+  const tasks: Promise<void>[] = [];
+  if (job.include_digalert) tasks.push(processDigAlertWave(db, job, env, signal));
+  if (job.include_usan_ca) tasks.push(processUsanWave(db, job, 'ca', env, signal));
+  if (job.include_usan_nv) tasks.push(processUsanWave(db, job, 'nv', env, signal));
+  await Promise.all(tasks);
 }
 
 /**
@@ -382,7 +403,11 @@ async function processOneRound(
  */
 export async function runJobSlice(db: D1Database, jobId: number, env: Env): Promise<FetchJobRow | null> {
   if (await isFetchStopped(db)) return getJob(db, jobId);
-  if (runningSlices.has(jobId)) return getJob(db, jobId);
+  if (runningSlices.has(jobId)) {
+    const started = sliceStartedAt.get(jobId) ?? 0;
+    if (Date.now() - started < TIME_BUDGET_MS + 5_000) return getJob(db, jobId);
+    clearRunningSlice(jobId);
+  }
 
   let job = await getJob(db, jobId);
   if (!job || job.status === 'cancelled' || job.status === 'completed' || job.status === 'paused') {
@@ -390,14 +415,15 @@ export async function runJobSlice(db: D1Database, jobId: number, env: Env): Prom
   }
 
   runningSlices.add(jobId);
+  sliceStartedAt.set(jobId, Date.now());
   const abort = new AbortController();
   activeAborts.set(jobId, abort);
   const signal = abort.signal;
-  const deadline = Date.now() + TIME_BUDGET_MS;
+  const deadlineTimer = setTimeout(() => abort.abort(), TIME_BUDGET_MS);
 
   try {
-    while (Date.now() < deadline) {
-      if (signal.aborted || (await isFetchStopped(db))) {
+    while (!signal.aborted) {
+      if (await isFetchStopped(db)) {
         await saveJob(db, job, 'cancelled');
         return { ...job, status: 'cancelled' };
       }
@@ -412,21 +438,28 @@ export async function runJobSlice(db: D1Database, jobId: number, env: Env): Prom
 
       await processOneRound(db, job, env, signal);
       await saveJob(db, job, 'running');
+      if (signal.aborted) break;
       await sleep(FETCH_STAGGER_MS);
     }
 
     return job;
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') {
-      await saveJob(db, job!, 'cancelled');
-      return { ...job!, status: 'cancelled' };
+      if (await isFetchStopped(db)) {
+        await saveJob(db, job!, 'cancelled');
+        return { ...job!, status: 'cancelled' };
+      }
+      await saveJob(db, job!, 'running');
+      return { ...job!, status: 'running' };
     }
     job!.error_count += 1;
     job!.last_error = e instanceof Error ? e.message : String(e);
     await saveJob(db, job!, 'failed');
     return { ...job!, status: 'failed' };
   } finally {
+    clearTimeout(deadlineTimer);
     runningSlices.delete(jobId);
+    sliceStartedAt.delete(jobId);
     if (activeAborts.get(jobId) === abort) activeAborts.delete(jobId);
   }
 }
@@ -436,25 +469,60 @@ function resolveWorkerOrigin(workerOrigin: string | undefined, env: Env): string
   return url?.trim() || undefined;
 }
 
-/** Kick off the next slice via a fresh HTTP request (reliable in production Workers). */
+/** Kick off the next slice via a fresh HTTP request (each tick gets its own 30s waitUntil budget). */
+async function chainNextSlice(
+  jobId: number,
+  workerOrigin: string | undefined,
+  env: Env
+): Promise<void> {
+  const origin = resolveWorkerOrigin(workerOrigin, env);
+  if (!origin) {
+    console.error(`job ${jobId} chain skipped — set WORKER_URL in wrangler.toml`);
+    return;
+  }
+
+  const url = `${origin.replace(/\/$/, '')}/api/jobs/${jobId}/tick`;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(url, { method: 'POST' });
+      if (res.ok) return;
+      console.error(`job ${jobId} chain attempt ${attempt} failed`, res.status, await res.text());
+    } catch (e) {
+      console.error(`job ${jobId} chain attempt ${attempt} failed`, e);
+    }
+    if (attempt < 3) await sleep(300 * attempt);
+  }
+}
+
+function triggerNextSlice(
+  jobId: number,
+  env: Env,
+  ctx: ExecutionContext,
+  workerOrigin?: string
+): void {
+  ctx.waitUntil(chainNextSlice(jobId, workerOrigin, env));
+}
+
 function scheduleNextSlice(
   jobId: number,
   workerOrigin: string | undefined,
   env: Env,
   ctx: ExecutionContext
 ): void {
-  const origin = resolveWorkerOrigin(workerOrigin, env);
-  if (!origin) return;
-
-  const url = `${origin.replace(/\/$/, '')}/api/jobs/${jobId}/tick`;
-  ctx.waitUntil(
-    sleep(50).then(() =>
-      fetch(url, { method: 'POST' }).catch((e) => console.error(`job ${jobId} chain failed`, e))
-    )
-  );
+  triggerNextSlice(jobId, env, ctx, workerOrigin);
 }
 
-/** Chain slices until the job finishes — each slice triggers the next via self-fetch. */
+function parseDbDateTime(value: string): number {
+  return Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`);
+}
+
+function clearRunningSlice(jobId: number): void {
+  activeAborts.get(jobId)?.abort();
+  runningSlices.delete(jobId);
+  sliceStartedAt.delete(jobId);
+}
+
+/** Chain slices until the job finishes — each slice triggers the next via a new HTTP tick. */
 export async function continueJobUntilDone(
   db: D1Database,
   jobId: number,
@@ -462,37 +530,48 @@ export async function continueJobUntilDone(
   ctx: ExecutionContext,
   workerOrigin?: string
 ): Promise<void> {
-  const job = await runJobSlice(db, jobId, env);
-  if (!job) return;
-  if (job.status === 'running' && !(await isFetchStopped(db))) {
-    const origin = resolveWorkerOrigin(workerOrigin, env);
-    if (origin) {
-      scheduleNextSlice(jobId, origin, env, ctx);
-    } else {
-      // Local dev fallback when no origin/WORKER_URL is configured
-      ctx.waitUntil(continueJobUntilDone(db, jobId, env, ctx));
-    }
+  for (let round = 0; round < SLICES_PER_TICK; round++) {
+    if (await isFetchStopped(db)) return;
+    const job = await runJobSlice(db, jobId, env);
+    if (!job || job.status !== 'running') return;
+  }
+  if (!(await isFetchStopped(db))) {
+    await chainNextSlice(jobId, workerOrigin, env);
   }
 }
 
-/** Resume any running jobs that lost their auto-chain (e.g. cron-started without WORKER_URL). */
+/** Nudge stalled running jobs via a new HTTP tick (reliable vs waitUntil recovery). */
+export function kickStaleRunningJobs(db: D1Database, env: Env, workerOrigin?: string): void {
+  const origin = resolveWorkerOrigin(workerOrigin, env);
+  if (!origin) return;
+
+  void (async () => {
+    if (await isFetchStopped(db)) return;
+    const { results } = await db
+      .prepare("SELECT id, updated_at FROM fetch_jobs WHERE status = 'running'")
+      .all<{ id: number; updated_at: string }>();
+    const now = Date.now();
+    for (const row of results ?? []) {
+      if (now - parseDbDateTime(row.updated_at) <= STALE_JOB_MS) continue;
+      const url = `${origin.replace(/\/$/, '')}/api/jobs/${row.id}/tick`;
+      fetch(url, { method: 'POST' }).catch((e) => console.error(`kick stale job ${row.id}`, e));
+      break;
+    }
+  })();
+}
+
+/** Resume any running jobs that lost their auto-chain (e.g. Worker isolate restarted). */
 export async function resumeStalledJobs(
   db: D1Database,
   env: Env,
-  ctx: ExecutionContext,
+  _ctx: ExecutionContext,
   workerOrigin?: string
 ): Promise<number> {
-  const origin = resolveWorkerOrigin(workerOrigin, env);
-  if (!origin || (await isFetchStopped(db))) return 0;
-
+  kickStaleRunningJobs(db, env, workerOrigin);
   const { results } = await db
     .prepare("SELECT id FROM fetch_jobs WHERE status = 'running'")
     .all<{ id: number }>();
-  const ids = results ?? [];
-  for (const { id } of ids) {
-    if (!runningSlices.has(id)) scheduleNextSlice(id, origin, env, ctx);
-  }
-  return ids.length;
+  return results?.length ?? 0;
 }
 
 /** @deprecated alias — runs one continuous slice (chains via continueJobUntilDone) */

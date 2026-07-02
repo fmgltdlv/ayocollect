@@ -1,3 +1,5 @@
+import { MAX_TICKETS_PER_DAY } from '../types';
+
 export type DigAlertCursor = { date: string; counter: number; consecutiveMisses: number };
 export type UsanCursor = { date: string; seq: number; consecutiveMisses: number };
 
@@ -32,7 +34,7 @@ export function julianDay(d: Date): number {
 export function formatDigAlertTicket(d: Date, counter: number): string {
   const yy = String(d.getUTCFullYear()).slice(-2);
   const jdd = String(julianDay(d)).padStart(3, '0');
-  const xxx = String(counter).padStart(3, '0');
+  const xxx = counter <= 999 ? String(counter).padStart(3, '0') : String(counter);
   return `A${yy}${jdd}0${xxx}`;
 }
 
@@ -62,7 +64,7 @@ export function nextUsanCandidates(cursor: UsanCursor, endDate: string, count: n
     }
     tickets.push(formatUsanTicket(c.date, c.seq));
     c.seq += 1;
-    if (c.seq > 99999) {
+    if (c.seq > MAX_TICKETS_PER_DAY) {
       c.date = addDays(c.date, 1);
       c.seq = 1;
       c.consecutiveMisses = 0;
@@ -89,7 +91,7 @@ export function nextDigAlertCandidates(
     const d = new Date(c.date + 'T12:00:00Z');
     tickets.push(formatDigAlertTicket(d, c.counter));
     c.counter += 1;
-    if (c.counter > 999) {
+    if (c.counter > MAX_TICKETS_PER_DAY) {
       c.date = addDays(c.date, 1);
       c.counter = 1;
       c.consecutiveMisses = 0;

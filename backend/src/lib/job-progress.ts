@@ -29,6 +29,8 @@ export type JobProgress = {
   createdAt: string;
   updatedAt: string;
   batchSize: number;
+  systemsComplete: number;
+  systemsActive: number;
   systems: {
     digalert: SystemProgress;
     usanCa: SystemProgress;
@@ -120,12 +122,40 @@ function digAlertProgress(
     done,
     dateProgressPct: pct,
     detail: done
-      ? 'Finished scanning date range'
+      ? fetched
+        ? 'Finished scanning date range'
+        : 'No DigAlert tickets in range (Southern CA only)'
       : `Scanning ${c.date}, counter ${c.counter} (next: ${nextTicket})`,
   };
 }
 
 export function buildJobProgress(job: FetchJobRow): JobProgress {
+  const systems = {
+    digalert: digAlertProgress(
+      !!job.include_digalert,
+      job.digalert_cursor,
+      job.digalert_fetched,
+      job.start_date,
+      job.end_date
+    ),
+    usanCa: usanProgress(
+      !!job.include_usan_ca,
+      job.usan_ca_cursor,
+      job.usan_ca_fetched,
+      job.start_date,
+      job.end_date
+    ),
+    usanNv: usanProgress(
+      !!job.include_usan_nv,
+      job.usan_nv_cursor,
+      job.usan_nv_fetched,
+      job.start_date,
+      job.end_date
+    ),
+  };
+  const active = [systems.digalert, systems.usanCa, systems.usanNv].filter((s) => s.enabled);
+  const systemsComplete = active.filter((s) => s.done).length;
+
   return {
     jobId: job.id,
     status: job.status,
@@ -136,28 +166,8 @@ export function buildJobProgress(job: FetchJobRow): JobProgress {
     createdAt: job.created_at,
     updatedAt: job.updated_at,
     batchSize: BATCH_SIZE,
-    systems: {
-      digalert: digAlertProgress(
-        !!job.include_digalert,
-        job.digalert_cursor,
-        job.digalert_fetched,
-        job.start_date,
-        job.end_date
-      ),
-      usanCa: usanProgress(
-        !!job.include_usan_ca,
-        job.usan_ca_cursor,
-        job.usan_ca_fetched,
-        job.start_date,
-        job.end_date
-      ),
-      usanNv: usanProgress(
-        !!job.include_usan_nv,
-        job.usan_nv_cursor,
-        job.usan_nv_fetched,
-        job.start_date,
-        job.end_date
-      ),
-    },
+    systemsComplete,
+    systemsActive: active.length,
+    systems,
   };
 }

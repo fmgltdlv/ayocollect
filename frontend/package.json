@@ -1,0 +1,11 @@
+{
+  "name": "ayocollect-frontend",
+  "private": true,
+  "scripts": {
+    "dev": "npx serve . -p 8788",
+    "deploy": "wrangler pages deploy . --project-name=ayocollect-ui"
+  },
+  "devDependencies": {
+    "wrangler": "^3.91.0"
+  }
+}

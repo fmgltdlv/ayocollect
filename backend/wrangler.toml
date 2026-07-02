@@ -7,14 +7,17 @@ binding = "DB"
 database_name = "ayocollect-db"
 database_id = "d1d567d9-a127-43f4-be24-1dd370928b48"
 
-[assets]
-directory = "../frontend"
-binding = "ASSETS"
-
 [triggers]
-crons = ["0 * * * *"]
+crons = ["0 * * * *", "*/5 * * * *"]
+
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = true
+head_sampling_rate = 1
 
 # Public URL of this Worker — needed for cron/auto-fetch jobs to chain in the background.
 # Example: https://811-ticket-serverless.<your-subdomain>.workers.dev
 [vars]
-WORKER_URL = ""
+WORKER_URL = "https://ayocollect.thefieldmappinggroup.workers.dev"

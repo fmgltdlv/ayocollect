@@ -1,0 +1,16 @@
+{
+  "timestamp": "2025-10-24T20:00:00Z",
+  "webhookNotificationId": 12345,
+  "messageVersion": "1.0.0",
+  "message": {
+    "utilityId": 42,
+    "utilityName": "Example Utility",
+    "stationCode": "ABC",
+    "ticketNumber": "2025102400123-001",
+    "sequenceNumber": 7,
+    "requestDate": "2025-10-24T19:59:00Z",
+    "XMLBase64": "PEZha2VYTUw+PC9GYWtlWE1MPg==",
+    "GMLBase64": "RkFLRS1HTUw=",
+    "GIFBase64": "RkFLRS1HSUY="
+  }
+}

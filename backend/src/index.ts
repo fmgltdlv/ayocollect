@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import type { BadgeFilter } from './db/queries';
 import type { Env, TicketSystem } from './types';
 import {
   fetchDigAlertRaw,
@@ -8,10 +9,12 @@ import {
 } from './fetchers';
 import { upsertDigAlert, upsertUsan } from './db/upsert';
 import {
+  countTickets,
   enrichListWithBadges,
   getDigAlertDetail,
   getUsanDetail,
   listTickets,
+  listTicketsMulti,
 } from './db/queries';
 import {
   abortJob,
@@ -20,6 +23,8 @@ import {
   createJob,
   getJob,
   listJobs,
+  kickStaleRunningJobs,
+  resumeStalledJobs,
   runJobSlice,
   runCron,
   stopAllJobs,
@@ -61,6 +66,7 @@ app.post('/api/jobs/stop-all', async (c) => {
 app.get('/api/jobs', async (c) => {
   const jobs = await listJobs(c.env.DB);
   const stopped = await isFetchStopped(c.env.DB);
+  kickStaleRunningJobs(c.env.DB, c.env, workerOrigin(c));
   return c.json({ jobs, fetchStopped: stopped });
 });
 
@@ -115,6 +121,16 @@ app.post('/api/jobs/:id/resume', async (c) => {
   return c.json({ job, continued: true });
 });
 
+function parseBadges(q: (k: string) => string | undefined) {
+  const raw = q('badges');
+  if (!raw) return [];
+  const valid = new Set<BadgeFilter>(['pending', 'blocker', 'late']);
+  return raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s): s is BadgeFilter => valid.has(s as BadgeFilter));
+}
+
 function listQuery(c: { req: { query: (k: string) => string | undefined } }) {
   const q = c.req.query.bind(c.req);
   const num = (k: string) => {
@@ -130,14 +146,41 @@ function listQuery(c: { req: { query: (k: string) => string | undefined } }) {
     maxLon: num('maxLon'),
     maxLat: num('maxLat'),
     limit: num('limit'),
+    offset: num('offset'),
+    badges: parseBadges(q),
   };
 }
 
-async function ticketsListHandler(c: { env: Env; req: { query: (k: string) => string | undefined } }, system: TicketSystem) {
-  const rows = await listTickets(c.env.DB, system, listQuery(c));
-  const tickets = await enrichListWithBadges(c.env.DB, system, rows);
-  return { tickets };
+function parseSystems(q: (k: string) => string | undefined): TicketSystem[] {
+  const raw = q('systems');
+  if (!raw) return [];
+  const valid = new Set<TicketSystem>(['digalert', 'usan-ca', 'usan-nv']);
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s): s is TicketSystem => valid.has(s as TicketSystem));
 }
+
+async function ticketsListHandler(c: { env: Env; req: { query: (k: string) => string | undefined } }, system: TicketSystem) {
+  const params = listQuery(c);
+  const rows = await listTickets(c.env.DB, system, params);
+  const total = await countTickets(c.env.DB, system, params);
+  const tickets = await enrichListWithBadges(c.env.DB, system, rows);
+  const limit = params.limit ?? 30;
+  const offset = params.offset ?? 0;
+  return { tickets, total, limit, offset };
+}
+
+app.get('/api/tickets', async (c) => {
+  const systems = parseSystems(c.req.query.bind(c.req));
+  if (!systems.length) {
+    return c.json({ error: 'At least one system required (systems=digalert,usan-ca,usan-nv)' }, 400);
+  }
+  const params = listQuery(c);
+  const { tickets: rows, total, limit, offset } = await listTicketsMulti(c.env.DB, systems, params);
+  const tickets = await enrichListWithBadges(c.env.DB, systems[0], rows);
+  return c.json({ tickets, total, limit, offset });
+});
 
 app.get('/api/digalert/tickets', async (c) => c.json(await ticketsListHandler(c, 'digalert')));
 app.get('/api/usan-ca/tickets', async (c) => c.json(await ticketsListHandler(c, 'usan-ca')));
@@ -191,15 +234,21 @@ app.post('/api/usan-nv/fetch', async (c) => {
   return c.json({ ticketNumber: id, detail });
 });
 
-app.all('*', async (c) => {
-  if (c.req.path.startsWith('/api/')) return c.notFound();
-  return c.env.ASSETS.fetch(c.req.raw);
-});
+app.get('/', (c) =>
+  c.json({
+    service: 'ayocollect-api',
+    health: '/api/health',
+    ui: 'https://ayocollect-ui.pages.dev',
+  })
+);
 
 export default {
   fetch: app.fetch,
-  scheduled: async (_event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
-    ctx.waitUntil(runCron(env.DB, env, ctx));
+  scheduled: async (event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
+    if (event.cron === '0 * * * *') {
+      ctx.waitUntil(runCron(env.DB, env, ctx));
+    }
+    ctx.waitUntil(resumeStalledJobs(env.DB, env, ctx, env.WORKER_URL));
   },
 };
 

@@ -4,17 +4,28 @@ const app = document.getElementById('app');
 const stoppedBanner = document.getElementById('stopped-banner');
 const detailTab = document.getElementById('detail-tab');
 
+const BROWSE_PAGE_SIZE = 30;
+
 let state = {
   view: 'browse',
-  system: 'usan-nv',
+  browseSystems: ['digalert', 'usan-ca', 'usan-nv'],
+  browsePage: 0,
+  browseTotal: 0,
+  browseParams: {},
+  browseBadges: [],
   detail: null,
   detailSystem: null,
   searchMap: null,
   detailMap: null,
   drawLayer: null,
+  jobsPollId: null,
 };
 
 function setView(view) {
+  if (state.jobsPollId) {
+    clearInterval(state.jobsPollId);
+    state.jobsPollId = null;
+  }
   state.view = view;
   document.querySelectorAll('.tab').forEach((t) => {
     t.classList.toggle('active', t.dataset.view === view);
@@ -49,39 +60,134 @@ function systemLabel(s) {
 }
 
 function ticketRowLabel(t, system) {
-  if (system === 'digalert') {
+  const sys = system ?? t.system;
+  if (sys === 'digalert') {
     return [t.place, t.street, t.work_type].filter(Boolean).join(' · ') || t.location || '—';
   }
   return [t.address, t.work_type, t.work_activity].filter(Boolean).join(' · ') || '—';
 }
 
+function browseSystemsFromDom() {
+  const systems = [];
+  if (document.getElementById('browse-da')?.checked) systems.push('digalert');
+  if (document.getElementById('browse-ca')?.checked) systems.push('usan-ca');
+  if (document.getElementById('browse-nv')?.checked) systems.push('usan-nv');
+  return systems;
+}
+
+function browseBadgesFromDom() {
+  const badges = [];
+  if (document.getElementById('browse-badge-pending')?.checked) badges.push('pending');
+  if (document.getElementById('browse-badge-blocker')?.checked) badges.push('blocker');
+  if (document.getElementById('browse-badge-late')?.checked) badges.push('late');
+  return badges;
+}
+
+function browseFiltersFromDom() {
+  const params = {};
+  const start = document.getElementById('start-date')?.value;
+  const end = document.getElementById('end-date')?.value;
+  const ticket = document.getElementById('ticket-filter')?.value.trim();
+  if (start) params.startDate = start;
+  if (end) params.endDate = end;
+  if (ticket) params.ticketNumber = ticket;
+  if (state.drawLayer) {
+    Object.assign(params, bboxFromLayer(state.drawLayer));
+  }
+  const badges = browseBadgesFromDom();
+  if (badges.length) params.badges = badges.join(',');
+  return params;
+}
+
+function renderBrowseResults(tickets, total, page) {
+  const resultsEl = document.getElementById('results');
+  if (!tickets.length) {
+    resultsEl.textContent = 'No tickets found.';
+    return;
+  }
+
+  const start = page * BROWSE_PAGE_SIZE + 1;
+  const end = Math.min(start + tickets.length - 1, total);
+  const multiSystem = state.browseSystems.length > 1;
+
+  resultsEl.innerHTML = `
+    <div class="browse-meta">
+      <span class="muted">Showing ${start}–${end} of ${total}</span>
+      <div class="pagination">
+        <button class="btn btn-secondary" id="browse-prev" type="button" ${page === 0 ? 'disabled' : ''}>Previous</button>
+        <span class="muted">Page ${page + 1} of ${Math.max(1, Math.ceil(total / BROWSE_PAGE_SIZE))}</span>
+        <button class="btn btn-secondary" id="browse-next" type="button" ${end >= total ? 'disabled' : ''}>Next</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Badges</th>${multiSystem ? '<th>System</th>' : ''}<th>Ticket</th><th>Summary</th><th>Updated</th>
+      </tr></thead>
+      <tbody>
+        ${tickets
+          .map(
+            (t) => `
+          <tr class="clickable" data-system="${t.system}" data-ticket="${t.ticket_number}" data-revision="${t.revision ?? '00A'}">
+            <td>${badgesHtml(t.badges)}</td>
+            ${multiSystem ? `<td>${systemLabel(t.system)}</td>` : ''}
+            <td class="mono">${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}</td>
+            <td>${ticketRowLabel(t)}</td>
+            <td>${t.updated_at ?? ''}</td>
+          </tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>`;
+
+  document.getElementById('browse-prev')?.addEventListener('click', () => {
+    if (state.browsePage > 0) runBrowseSearch(state.browsePage - 1);
+  });
+  document.getElementById('browse-next')?.addEventListener('click', () => {
+    if ((state.browsePage + 1) * BROWSE_PAGE_SIZE < state.browseTotal) {
+      runBrowseSearch(state.browsePage + 1);
+    }
+  });
+
+  resultsEl.querySelectorAll('tr.clickable').forEach((tr) => {
+    tr.addEventListener('click', () =>
+      openDetail(tr.dataset.system, tr.dataset.ticket, tr.dataset.revision)
+    );
+  });
+}
+
 function renderBrowse() {
   app.innerHTML = `
     <div class="panel">
+      <div class="row checks">
+        <span class="label-text">Systems</span>
+        <label><input type="checkbox" id="browse-da" ${state.browseSystems.includes('digalert') ? 'checked' : ''} /> Dig Alert</label>
+        <label><input type="checkbox" id="browse-ca" ${state.browseSystems.includes('usan-ca') ? 'checked' : ''} /> USAN CA</label>
+        <label><input type="checkbox" id="browse-nv" ${state.browseSystems.includes('usan-nv') ? 'checked' : ''} /> USAN NV</label>
+      </div>
+      <div class="row checks">
+        <span class="label-text">Badges</span>
+        <label><input type="checkbox" id="browse-badge-pending" ${state.browseBadges.includes('pending') ? 'checked' : ''} /> <span class="badge badge-pending">Pending</span></label>
+        <label><input type="checkbox" id="browse-badge-blocker" ${state.browseBadges.includes('blocker') ? 'checked' : ''} /> <span class="badge badge-blocker">Blocker</span></label>
+        <label><input type="checkbox" id="browse-badge-late" ${state.browseBadges.includes('late') ? 'checked' : ''} /> <span class="badge badge-late">Late</span></label>
+      </div>
       <div class="row">
-        <label>System
-          <select id="browse-system">
-            <option value="digalert">Dig Alert</option>
-            <option value="usan-ca">USAN CA</option>
-            <option value="usan-nv" selected>USAN NV</option>
-          </select>
-        </label>
         <label>Start date <input type="date" id="start-date" /></label>
         <label>End date <input type="date" id="end-date" /></label>
         <label>Ticket # <input type="text" id="ticket-filter" placeholder="optional" /></label>
         <button class="btn" id="search-btn" type="button">Search</button>
       </div>
-      <p class="muted">Draw a rectangle on the map to search by bounding box (coarse overlap).</p>
+      <p class="muted">Draw a rectangle on the map to search by bounding box (coarse overlap). Results show the 30 most recent matches per page.</p>
       <div id="search-map"></div>
     </div>
-    <div class="panel"><div id="results">Run a search to see tickets.</div></div>
+    <div class="panel"><div id="results">Loading…</div></div>
   `;
 
-  document.getElementById('browse-system').value = state.system;
+  setTimeout(() => {
+    initSearchMap();
+    runBrowseSearch(0);
+  }, 0);
 
-  setTimeout(() => initSearchMap(), 0);
-
-  document.getElementById('search-btn').addEventListener('click', runSearch);
+  document.getElementById('search-btn').addEventListener('click', () => runBrowseSearch(0));
 }
 
 function initSearchMap() {
@@ -118,50 +224,32 @@ function initSearchMap() {
   });
 }
 
-async function runSearch() {
-  state.system = document.getElementById('browse-system').value;
-  const params = {};
-  const start = document.getElementById('start-date').value;
-  const end = document.getElementById('end-date').value;
-  const ticket = document.getElementById('ticket-filter').value.trim();
-  if (start) params.startDate = start;
-  if (end) params.endDate = end;
-  if (ticket) params.ticketNumber = ticket;
-  if (state.drawLayer) {
-    const b = bboxFromLayer(state.drawLayer);
-    Object.assign(params, b);
+async function runBrowseSearch(page = 0) {
+  const systems = browseSystemsFromDom();
+  if (!systems.length) {
+    document.getElementById('results').textContent = 'Select at least one system.';
+    return;
   }
+
+  state.browseSystems = systems;
+  state.browsePage = page;
+  if (page === 0) {
+    state.browseParams = browseFiltersFromDom();
+    state.browseBadges = browseBadgesFromDom();
+  }
+
+  const params = {
+    ...state.browseParams,
+    limit: BROWSE_PAGE_SIZE,
+    offset: page * BROWSE_PAGE_SIZE,
+  };
 
   const resultsEl = document.getElementById('results');
   resultsEl.textContent = 'Loading…';
   try {
-    const { tickets } = await api.listTickets(state.system, params);
-    if (!tickets.length) {
-      resultsEl.textContent = 'No tickets found.';
-      return;
-    }
-    resultsEl.innerHTML = `
-      <table>
-        <thead><tr>
-          <th>Badges</th><th>Ticket</th><th>Summary</th><th>Updated</th>
-        </tr></thead>
-        <tbody>
-          ${tickets
-            .map(
-              (t) => `
-            <tr class="clickable" data-ticket="${t.ticket_number}" data-revision="${t.revision ?? '00A'}">
-              <td>${badgesHtml(t.badges)}</td>
-              <td class="mono">${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}</td>
-              <td>${ticketRowLabel(t, state.system)}</td>
-              <td>${t.updated_at ?? ''}</td>
-            </tr>`
-            )
-            .join('')}
-        </tbody>
-      </table>`;
-    resultsEl.querySelectorAll('tr.clickable').forEach((tr) => {
-      tr.addEventListener('click', () => openDetail(state.system, tr.dataset.ticket, tr.dataset.revision));
-    });
+    const { tickets, total } = await api.browseTickets(systems, params);
+    state.browseTotal = total;
+    renderBrowseResults(tickets, total, page);
   } catch (e) {
     resultsEl.textContent = e.message;
   }
@@ -187,7 +275,7 @@ function renderFetch() {
     </div>
     <div class="panel">
       <h2>Batch job (6 parallel fetches per wave, runs continuously)</h2>
-      <p class="muted">Like the Python scraper: scans each day until 2 consecutive misses, then next day. Each wave pulls 6 tickets at once per system — runs continuously until the date range is done.</p>
+      <p class="muted">Each system skips to the next day after 2 consecutive misses (or after sequence/counter 3999). DigAlert = Southern CA only. CA/NV share ticket number format, so matching counts are normal.</p>
       <div class="row checks">
         <label><input type="checkbox" id="job-da" /> Dig Alert</label>
         <label><input type="checkbox" id="job-ca" checked /> USAN CA</label>
@@ -250,13 +338,110 @@ function renderFetch() {
   });
 }
 
+const JOBS_POLL_MS = 120_000;
+
+function jobStatusLabel(job, progress) {
+  if (job.status !== 'running' || !progress) return job.status;
+  if (progress.systemsComplete >= progress.systemsActive) return 'running';
+  return `running (${progress.systemsComplete}/${progress.systemsActive} systems done)`;
+}
+
+function bindJobsTableEvents(el) {
+  el.querySelectorAll('.tick-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await api.tickJob(btn.dataset.id);
+      refreshJobsList();
+    });
+  });
+  el.querySelectorAll('.stop-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Stop job #${btn.dataset.id}?`)) return;
+      await api.cancelJob(btn.dataset.id);
+      refreshJobsList();
+    });
+  });
+  el.querySelectorAll('.progress-btn').forEach((btn) => {
+    btn.addEventListener('click', () => showJobProgress(btn.dataset.id));
+  });
+}
+
+function renderJobsTable(jobs) {
+  if (!jobs.length) return '<p>No jobs yet.</p>';
+  return `
+    <p class="muted">DigAlert = Southern CA only. Each system scans up to 3999 tickets/day. CA/NV share ticket number format, so identical counts are expected.</p>
+    <table>
+      <thead><tr>
+        <th>ID</th><th>Status</th><th>Range</th><th>Systems</th><th>Fetched</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${jobs
+          .map(
+            (j) => `
+          <tr>
+            <td>${j.id}</td>
+            <td>${j.status}${j.status === 'running' ? ' <span class="muted">(auto-refreshes every 2 min)</span>' : ''}</td>
+            <td>${j.start_date} → ${j.end_date}</td>
+            <td class="mono">${[
+              j.include_digalert ? 'DA' : '',
+              j.include_usan_ca ? 'CA' : '',
+              j.include_usan_nv ? 'NV' : '',
+            ]
+              .filter(Boolean)
+              .join(', ')}</td>
+            <td>DA:${j.digalert_fetched} CA:${j.usan_ca_fetched} NV:${j.usan_nv_fetched}</td>
+            <td>
+              <div class="btn-row">
+                <button class="btn-secondary progress-btn" data-id="${j.id}" type="button">Progress</button>
+                ${j.status === 'paused' ? `<button class="btn tick-btn" data-id="${j.id}" type="button">Continue</button>` : ''}
+                ${['running', 'paused', 'pending'].includes(j.status) ? `<button class="btn-danger stop-btn" data-id="${j.id}" type="button">Stop</button>` : ''}
+              </div>
+            </td>
+          </tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>`;
+}
+
+function syncJobsPoll(jobs) {
+  const hasRunning = jobs.some((j) => j.status === 'running');
+  if (hasRunning && !state.jobsPollId) {
+    state.jobsPollId = setInterval(() => {
+      if (state.view === 'jobs') refreshJobsList();
+    }, JOBS_POLL_MS);
+  } else if (!hasRunning && state.jobsPollId) {
+    clearInterval(state.jobsPollId);
+    state.jobsPollId = null;
+  }
+}
+
+async function refreshJobsList() {
+  const el = document.getElementById('jobs-list');
+  if (!el) return;
+  try {
+    const { jobs, fetchStopped } = await api.listJobs();
+    stoppedBanner.classList.toggle('hidden', !fetchStopped);
+    el.innerHTML = renderJobsTable(jobs);
+    bindJobsTableEvents(el);
+    syncJobsPoll(jobs);
+  } catch (e) {
+    el.textContent = e.message;
+  }
+}
+
 async function renderJobs() {
   app.innerHTML = `
     <div class="panel">
       <h2>Auto-fetch settings</h2>
       <div id="settings-form">Loading…</div>
     </div>
-    <div class="panel"><div id="jobs-list">Loading…</div></div>
+    <div class="panel">
+      <div class="row" style="align-items:center;justify-content:space-between;margin-bottom:0.75rem">
+        <h2 style="margin:0">Jobs</h2>
+        <button class="btn-secondary" id="jobs-refresh-btn" type="button">Refresh</button>
+      </div>
+      <div id="jobs-list">Loading…</div>
+    </div>
   `;
   try {
     const settings = await api.getSettings();
@@ -284,62 +469,16 @@ async function renderJobs() {
       alert('Settings saved');
     });
 
-    const { jobs, fetchStopped } = await api.listJobs();
-    stoppedBanner.classList.toggle('hidden', !fetchStopped);
-    const el = document.getElementById('jobs-list');
-    if (!jobs.length) {
-      el.textContent = 'No jobs yet.';
-      return;
-    }
-    el.innerHTML = `
-      <table>
-        <thead><tr>
-          <th>ID</th><th>Status</th><th>Range</th><th>Systems</th><th>Fetched</th><th></th>
-        </tr></thead>
-        <tbody>
-          ${jobs
-            .map(
-              (j) => `
-            <tr>
-              <td>${j.id}</td>
-              <td>${j.status}</td>
-              <td>${j.start_date} → ${j.end_date}</td>
-              <td class="mono">${[
-                j.include_digalert ? 'DA' : '',
-                j.include_usan_ca ? 'CA' : '',
-                j.include_usan_nv ? 'NV' : '',
-              ]
-                .filter(Boolean)
-                .join(', ')}</td>
-              <td>DA:${j.digalert_fetched} CA:${j.usan_ca_fetched} NV:${j.usan_nv_fetched}</td>
-              <td>
-                <div class="btn-row">
-                  <button class="btn-secondary progress-btn" data-id="${j.id}" type="button">Progress</button>
-                  ${j.status === 'running' ? `<button class="btn tick-btn" data-id="${j.id}" type="button">Continue</button>` : ''}
-                  ${['running', 'paused', 'pending'].includes(j.status) ? `<button class="btn-danger stop-btn" data-id="${j.id}" type="button">Stop</button>` : ''}
-                </div>
-              </td>
-            </tr>`
-            )
-            .join('')}
-        </tbody>
-      </table>`;
-    el.querySelectorAll('.tick-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        await api.tickJob(btn.dataset.id);
-        renderJobs();
-      });
+    document.getElementById('jobs-refresh-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('jobs-refresh-btn');
+      btn.disabled = true;
+      btn.textContent = 'Refreshing…';
+      await refreshJobsList();
+      btn.disabled = false;
+      btn.textContent = 'Refresh';
     });
-    el.querySelectorAll('.stop-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        if (!confirm(`Stop job #${btn.dataset.id}?`)) return;
-        await api.cancelJob(btn.dataset.id);
-        renderJobs();
-      });
-    });
-    el.querySelectorAll('.progress-btn').forEach((btn) => {
-      btn.addEventListener('click', () => showJobProgress(btn.dataset.id));
-    });
+
+    await refreshJobsList();
   } catch (e) {
     document.getElementById('jobs-list').textContent = e.message;
   }
@@ -352,15 +491,25 @@ function progressBarHtml(pct) {
     <span class="muted">${pct}% through date range</span>`;
 }
 
-function systemBlock(label, sys) {
+function systemBlock(label, sys, jobStatus) {
   if (!sys.enabled) {
     return `<div class="system-progress done"><strong>${label}</strong><p class="muted">${sys.detail}</p></div>`;
   }
+  const badge = sys.done
+    ? jobStatus === 'running'
+      ? '<span class="badge badge-ok">Done scanning</span>'
+      : '<span class="badge badge-ok">Done</span>'
+    : '<span class="badge badge-pending">In progress</span>';
+  const note =
+    sys.done && jobStatus === 'running'
+      ? '<p class="muted">This system finished — job continues for remaining systems.</p>'
+      : '';
   return `
     <div class="system-progress ${sys.done ? 'done' : ''}">
       <strong>${label}</strong>
-      ${sys.done ? '<span class="badge badge-ok">Done</span>' : '<span class="badge badge-pending">In progress</span>'}
+      ${badge}
       <p>${sys.detail}</p>
+      ${note}
       ${progressBarHtml(sys.dateProgressPct)}
       <p class="mono muted">Fetched: ${sys.fetched}${sys.nextTicket ? ` · Next: ${sys.nextTicket}` : ''}</p>
     </div>`;
@@ -380,17 +529,20 @@ async function showJobProgress(jobId) {
     const p = progress;
     backdrop.querySelector('.modal').innerHTML = `
       <h2>Job #${p.jobId} progress</h2>
-      <p><strong>Status:</strong> ${p.status}
+      <p><strong>Status:</strong> ${jobStatusLabel(job, p)}
         ${fetchStopped ? ' · <span class="badge badge-blocker">ALL STOP active</span>' : ''}</p>
+      ${p.status === 'running' && p.systemsComplete < p.systemsActive
+        ? `<p class="muted">${p.systemsComplete} of ${p.systemsActive} systems finished scanning — job is still running.</p>`
+        : ''}
       <p><strong>Range:</strong> ${p.dateRange.start} → ${p.dateRange.end}</p>
       <p><strong>Triggered by:</strong> ${p.triggeredBy} · <strong>Parallel batch:</strong> ${p.batchSize} tickets/system/wave (continuous)</p>
       <p class="muted">Updated: ${p.updatedAt}</p>
       ${p.errorCount ? `<p class="badge badge-blocker">Errors: ${p.errorCount}${p.lastError ? ` — ${p.lastError}` : ''}</p>` : ''}
-      ${systemBlock('Dig Alert', p.systems.digalert)}
-      ${systemBlock('USAN CA', p.systems.usanCa)}
-      ${systemBlock('USAN NV', p.systems.usanNv)}
+      ${systemBlock('Dig Alert', p.systems.digalert, p.status)}
+      ${systemBlock('USAN CA', p.systems.usanCa, p.status)}
+      ${systemBlock('USAN NV', p.systems.usanNv, p.status)}
       <div class="btn-row" style="margin-top:1rem">
-        ${job.status === 'running' ? `<button class="btn tick-btn-modal" type="button">Continue job</button>` : ''}
+        ${job.status === 'paused' ? `<button class="btn tick-btn-modal" type="button">Continue job</button>` : ''}
         ${['running', 'paused', 'pending'].includes(job.status) ? `<button class="btn-danger stop-btn-modal" type="button">Stop job</button>` : ''}
         <button class="btn-secondary close-modal" type="button">Close</button>
       </div>`;
@@ -402,7 +554,7 @@ async function showJobProgress(jobId) {
         tickBtn.textContent = 'Continuing…';
         await api.tickJob(jobId);
         backdrop.remove();
-        renderJobs();
+        refreshJobsList();
       });
     }
     const stopBtn = backdrop.querySelector('.stop-btn-modal');
@@ -413,7 +565,7 @@ async function showJobProgress(jobId) {
         stopBtn.textContent = 'Stopping…';
         await api.cancelJob(jobId);
         backdrop.remove();
-        renderJobs();
+        refreshJobsList();
       });
     }
   } catch (e) {

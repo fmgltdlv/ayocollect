@@ -208,3 +208,29 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
   border-radius: 6px;
   cursor: pointer;
 }
+
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.browse-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.label-text {
+  font-size: 0.85rem;
+  color: var(--muted);
+  align-self: center;
+}

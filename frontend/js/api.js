@@ -1,7 +1,12 @@
-const API = '/api';
+function apiBase() {
+  if (typeof window !== 'undefined' && window.AYO_API_BASE) {
+    return String(window.AYO_API_BASE).replace(/\/$/, '');
+  }
+  return '/api';
+}
 
 async function request(path, options = {}) {
-  const res = await fetch(`${API}${path}`, {
+  const res = await fetch(`${apiBase()}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
   });
@@ -15,6 +20,10 @@ export const api = {
   listTickets: (system, params) => {
     const q = new URLSearchParams(params).toString();
     return request(`/${system}/tickets?${q}`);
+  },
+  browseTickets: (systems, params = {}) => {
+    const q = new URLSearchParams({ ...params, systems: systems.join(',') }).toString();
+    return request(`/tickets?${q}`);
   },
   getTicket: (system, ticketNumber, revision) => {
     const q = revision ? `?revision=${encodeURIComponent(revision)}` : '';

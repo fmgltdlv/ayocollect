@@ -32,5 +32,5 @@ Thumbs.db
 *.swp
 *.swo
 
-# Vite
-.vite/
+# Local dev overrides (copy from config.local.js.example)
+frontend/config.local.js
