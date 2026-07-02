@@ -2,6 +2,8 @@ export type Env = {
   DB: D1Database;
   ASSETS: Fetcher;
   DIGALERT_SESSION_COOKIES?: string;
+  /** Public Worker URL for self-fetch job chaining (cron / background). */
+  WORKER_URL?: string;
 };
 
 export type TicketSystem = 'digalert' | 'usan-ca' | 'usan-nv';

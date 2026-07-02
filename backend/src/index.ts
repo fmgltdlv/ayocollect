@@ -14,6 +14,8 @@ import {
   listTickets,
 } from './db/queries';
 import {
+  abortJob,
+  cancelJob,
   continueJobUntilDone,
   createJob,
   getJob,
@@ -28,6 +30,10 @@ import { getAutoFetchSettings, isFetchStopped, setSetting } from './lib/settings
 type HonoEnv = { Bindings: Env; Variables: {} };
 
 const app = new Hono<HonoEnv>();
+
+function workerOrigin(c: { req: { url: string } }): string {
+  return new URL(c.req.url).origin;
+}
 
 app.use('/api/*', cors());
 
@@ -74,29 +80,37 @@ app.post('/api/jobs', async (c) => {
     return c.json({ error: 'systems, startDate, endDate required' }, 400);
   }
   const id = await createJob(c.env.DB, body);
-  c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx));
+  c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx, workerOrigin(c)));
   const job = await getJob(c.env.DB, id);
   return c.json({ job, started: true, fetchStopped: await isFetchStopped(c.env.DB) });
 });
 
 app.post('/api/jobs/:id/tick', async (c) => {
   const id = Number(c.req.param('id'));
-  c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx));
+  c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx, workerOrigin(c)));
   const job = await getJob(c.env.DB, id);
   if (!job) return c.json({ error: 'Not found' }, 404);
   return c.json({ job, continued: true });
 });
 
+app.post('/api/jobs/:id/cancel', async (c) => {
+  const id = Number(c.req.param('id'));
+  const job = await cancelJob(c.env.DB, id);
+  if (!job) return c.json({ error: 'Not found' }, 404);
+  return c.json({ job, cancelled: true });
+});
+
 app.post('/api/jobs/:id/pause', async (c) => {
   const id = Number(c.req.param('id'));
   await c.env.DB.prepare("UPDATE fetch_jobs SET status = 'paused', updated_at = datetime('now') WHERE id = ?").bind(id).run();
+  abortJob(id);
   return c.json({ ok: true });
 });
 
 app.post('/api/jobs/:id/resume', async (c) => {
   const id = Number(c.req.param('id'));
   await c.env.DB.prepare("UPDATE fetch_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").bind(id).run();
-  c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx));
+  c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx, workerOrigin(c)));
   const job = await getJob(c.env.DB, id);
   return c.json({ job, continued: true });
 });

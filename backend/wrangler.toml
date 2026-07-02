@@ -13,3 +13,8 @@ binding = "ASSETS"
 
 [triggers]
 crons = ["0 * * * *"]
+
+# Public URL of this Worker — needed for cron/auto-fetch jobs to chain in the background.
+# Example: https://811-ticket-serverless.<your-subdomain>.workers.dev
+[vars]
+WORKER_URL = ""

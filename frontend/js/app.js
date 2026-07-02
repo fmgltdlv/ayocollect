@@ -187,7 +187,7 @@ function renderFetch() {
     </div>
     <div class="panel">
       <h2>Batch job (6 parallel fetches per wave, runs continuously)</h2>
-      <p class="muted">Like the Python scraper: scans each day until 2 consecutive misses, then next day. Each wave pulls 4 tickets at once per system — no hourly wait.</p>
+      <p class="muted">Like the Python scraper: scans each day until 2 consecutive misses, then next day. Each wave pulls 6 tickets at once per system — runs continuously until the date range is done.</p>
       <div class="row checks">
         <label><input type="checkbox" id="job-da" /> Dig Alert</label>
         <label><input type="checkbox" id="job-ca" checked /> USAN CA</label>
@@ -316,6 +316,7 @@ async function renderJobs() {
                 <div class="btn-row">
                   <button class="btn-secondary progress-btn" data-id="${j.id}" type="button">Progress</button>
                   ${j.status === 'running' ? `<button class="btn tick-btn" data-id="${j.id}" type="button">Continue</button>` : ''}
+                  ${['running', 'paused', 'pending'].includes(j.status) ? `<button class="btn-danger stop-btn" data-id="${j.id}" type="button">Stop</button>` : ''}
                 </div>
               </td>
             </tr>`
@@ -326,6 +327,13 @@ async function renderJobs() {
     el.querySelectorAll('.tick-btn').forEach((btn) => {
       btn.addEventListener('click', async () => {
         await api.tickJob(btn.dataset.id);
+        renderJobs();
+      });
+    });
+    el.querySelectorAll('.stop-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Stop job #${btn.dataset.id}?`)) return;
+        await api.cancelJob(btn.dataset.id);
         renderJobs();
       });
     });
@@ -383,6 +391,7 @@ async function showJobProgress(jobId) {
       ${systemBlock('USAN NV', p.systems.usanNv)}
       <div class="btn-row" style="margin-top:1rem">
         ${job.status === 'running' ? `<button class="btn tick-btn-modal" type="button">Continue job</button>` : ''}
+        ${['running', 'paused', 'pending'].includes(job.status) ? `<button class="btn-danger stop-btn-modal" type="button">Stop job</button>` : ''}
         <button class="btn-secondary close-modal" type="button">Close</button>
       </div>`;
     backdrop.querySelector('.close-modal').addEventListener('click', () => backdrop.remove());
@@ -392,6 +401,17 @@ async function showJobProgress(jobId) {
         tickBtn.disabled = true;
         tickBtn.textContent = 'Continuing…';
         await api.tickJob(jobId);
+        backdrop.remove();
+        renderJobs();
+      });
+    }
+    const stopBtn = backdrop.querySelector('.stop-btn-modal');
+    if (stopBtn) {
+      stopBtn.addEventListener('click', async () => {
+        if (!confirm(`Stop job #${jobId}?`)) return;
+        stopBtn.disabled = true;
+        stopBtn.textContent = 'Stopping…';
+        await api.cancelJob(jobId);
         backdrop.remove();
         renderJobs();
       });

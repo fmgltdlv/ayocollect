@@ -41,13 +41,27 @@ export type FetchJobRow = {
   updated_at: string;
 };
 
-/** Max runtime per Worker slice before chaining another via waitUntil */
+/** Max runtime per Worker slice before chaining another request */
 const TIME_BUDGET_MS = 28_000;
 
-let activeAbort: AbortController | null = null;
+const activeAborts = new Map<number, AbortController>();
+const runningSlices = new Set<number>();
+
+export function abortJob(jobId: number): void {
+  activeAborts.get(jobId)?.abort();
+}
 
 export function abortActiveBatch(): void {
-  activeAbort?.abort();
+  for (const ctrl of activeAborts.values()) ctrl.abort();
+}
+
+export async function cancelJob(db: D1Database, jobId: number): Promise<FetchJobRow | null> {
+  abortJob(jobId);
+  await db
+    .prepare("UPDATE fetch_jobs SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?")
+    .bind(jobId)
+    .run();
+  return getJob(db, jobId);
 }
 
 export async function stopAllJobs(db: D1Database): Promise<number> {
@@ -368,14 +382,17 @@ async function processOneRound(
  */
 export async function runJobSlice(db: D1Database, jobId: number, env: Env): Promise<FetchJobRow | null> {
   if (await isFetchStopped(db)) return getJob(db, jobId);
+  if (runningSlices.has(jobId)) return getJob(db, jobId);
 
   let job = await getJob(db, jobId);
   if (!job || job.status === 'cancelled' || job.status === 'completed' || job.status === 'paused') {
     return job;
   }
 
-  activeAbort = new AbortController();
-  const signal = activeAbort.signal;
+  runningSlices.add(jobId);
+  const abort = new AbortController();
+  activeAborts.set(jobId, abort);
+  const signal = abort.signal;
   const deadline = Date.now() + TIME_BUDGET_MS;
 
   try {
@@ -409,22 +426,73 @@ export async function runJobSlice(db: D1Database, jobId: number, env: Env): Prom
     await saveJob(db, job!, 'failed');
     return { ...job!, status: 'failed' };
   } finally {
-    activeAbort = null;
+    runningSlices.delete(jobId);
+    if (activeAborts.get(jobId) === abort) activeAborts.delete(jobId);
   }
 }
 
-/** Chain slices until the job finishes — no delay between slices except ~100ms throttle. */
+function resolveWorkerOrigin(workerOrigin: string | undefined, env: Env): string | undefined {
+  const url = workerOrigin ?? env.WORKER_URL;
+  return url?.trim() || undefined;
+}
+
+/** Kick off the next slice via a fresh HTTP request (reliable in production Workers). */
+function scheduleNextSlice(
+  jobId: number,
+  workerOrigin: string | undefined,
+  env: Env,
+  ctx: ExecutionContext
+): void {
+  const origin = resolveWorkerOrigin(workerOrigin, env);
+  if (!origin) return;
+
+  const url = `${origin.replace(/\/$/, '')}/api/jobs/${jobId}/tick`;
+  ctx.waitUntil(
+    sleep(50).then(() =>
+      fetch(url, { method: 'POST' }).catch((e) => console.error(`job ${jobId} chain failed`, e))
+    )
+  );
+}
+
+/** Chain slices until the job finishes — each slice triggers the next via self-fetch. */
 export async function continueJobUntilDone(
   db: D1Database,
   jobId: number,
   env: Env,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
+  workerOrigin?: string
 ): Promise<void> {
   const job = await runJobSlice(db, jobId, env);
   if (!job) return;
   if (job.status === 'running' && !(await isFetchStopped(db))) {
-    ctx.waitUntil(continueJobUntilDone(db, jobId, env, ctx));
+    const origin = resolveWorkerOrigin(workerOrigin, env);
+    if (origin) {
+      scheduleNextSlice(jobId, origin, env, ctx);
+    } else {
+      // Local dev fallback when no origin/WORKER_URL is configured
+      ctx.waitUntil(continueJobUntilDone(db, jobId, env, ctx));
+    }
   }
+}
+
+/** Resume any running jobs that lost their auto-chain (e.g. cron-started without WORKER_URL). */
+export async function resumeStalledJobs(
+  db: D1Database,
+  env: Env,
+  ctx: ExecutionContext,
+  workerOrigin?: string
+): Promise<number> {
+  const origin = resolveWorkerOrigin(workerOrigin, env);
+  if (!origin || (await isFetchStopped(db))) return 0;
+
+  const { results } = await db
+    .prepare("SELECT id FROM fetch_jobs WHERE status = 'running'")
+    .all<{ id: number }>();
+  const ids = results ?? [];
+  for (const { id } of ids) {
+    if (!runningSlices.has(id)) scheduleNextSlice(id, origin, env, ctx);
+  }
+  return ids.length;
 }
 
 /** @deprecated alias — runs one continuous slice (chains via continueJobUntilDone) */
@@ -480,7 +548,9 @@ export async function runCron(db: D1Database, env: Env, ctx: ExecutionContext): 
     if (systems.length) {
       const id = await createJob(db, { systems, startDate, endDate, triggeredBy: 'cron' });
       await db.prepare("UPDATE app_settings SET value = ? WHERE key = 'auto_fetch_last_run_date'").bind(today).run();
-      ctx.waitUntil(continueJobUntilDone(db, id, env, ctx));
+      ctx.waitUntil(continueJobUntilDone(db, id, env, ctx, env.WORKER_URL));
     }
   }
+
+  ctx.waitUntil(resumeStalledJobs(db, env, ctx, env.WORKER_URL));
 }

@@ -26,6 +26,7 @@ export const api = {
   listJobs: () => request('/jobs'),
   getJob: (id) => request(`/jobs/${id}`),
   tickJob: (id) => request(`/jobs/${id}/tick`, { method: 'POST' }),
+  cancelJob: (id) => request(`/jobs/${id}/cancel`, { method: 'POST' }),
   stopAll: () => request('/jobs/stop-all', { method: 'POST' }),
   getSettings: () => request('/settings/auto-fetch'),
   putSettings: (body) =>
