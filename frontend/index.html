@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>811 Ticket Analytics</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="header">
+    <h1>811 Ticket Analytics</h1>
+    <button id="all-stop-btn" class="btn-danger" type="button">ALL STOP</button>
+  </header>
+
+  <div id="stopped-banner" class="banner hidden">Fetching stopped — start a new job to resume.</div>
+
+  <nav class="tabs">
+    <button data-view="browse" class="tab active">Browse</button>
+    <button data-view="fetch" class="tab">Fetch</button>
+    <button data-view="jobs" class="tab">Jobs</button>
+    <button data-view="detail" class="tab hidden" id="detail-tab">Detail</button>
+  </nav>
+
+  <main id="app"></main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

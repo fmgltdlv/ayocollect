@@ -1,0 +1,62 @@
+const API = '/api';
+
+async function request(path, options = {}) {
+  const res = await fetch(`${API}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+export const api = {
+  health: () => request('/health'),
+  listTickets: (system, params) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/${system}/tickets?${q}`);
+  },
+  getTicket: (system, ticketNumber, revision) => {
+    const q = revision ? `?revision=${encodeURIComponent(revision)}` : '';
+    return request(`/${system}/tickets/${encodeURIComponent(ticketNumber)}${q}`);
+  },
+  fetchOne: (system, body) =>
+    request(`/${system}/fetch`, { method: 'POST', body: JSON.stringify(body) }),
+  createJob: (body) => request('/jobs', { method: 'POST', body: JSON.stringify(body) }),
+  listJobs: () => request('/jobs'),
+  getJob: (id) => request(`/jobs/${id}`),
+  tickJob: (id) => request(`/jobs/${id}/tick`, { method: 'POST' }),
+  stopAll: () => request('/jobs/stop-all', { method: 'POST' }),
+  getSettings: () => request('/settings/auto-fetch'),
+  putSettings: (body) =>
+    request('/settings/auto-fetch', { method: 'PUT', body: JSON.stringify(body) }),
+};
+
+export function badgesHtml(badges) {
+  if (!badges) return '';
+  const parts = [];
+  if (badges.isPending) parts.push('<span class="badge badge-pending">Pending</span>');
+  if (badges.hasBlockers) parts.push('<span class="badge badge-blocker">Blocker</span>');
+  if (badges.hadLateResponse) parts.push('<span class="badge badge-late">Late</span>');
+  return parts.join('') || '<span class="muted">—</span>';
+}
+
+export function parseWktToLatLngs(wkt) {
+  if (!wkt) return [];
+  const m = wkt.match(/POLYGON\s*\(\(([^)]+)\)\)/i);
+  if (!m) return [];
+  return m[1].split(',').map((pair) => {
+    const [lon, lat] = pair.trim().split(/\s+/).map(Number);
+    return [lat, lon];
+  });
+}
+
+export function bboxFromLayer(layer) {
+  const b = layer.getBounds();
+  return {
+    minLat: b.getSouth(),
+    minLon: b.getWest(),
+    maxLat: b.getNorth(),
+    maxLon: b.getEast(),
+  };
+}
