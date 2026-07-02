@@ -1,4 +1,4 @@
-name = "811-ticket-serverless"
+name = "ayocollect"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
 
