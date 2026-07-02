@@ -4,8 +4,8 @@ compatibility_date = "2024-11-01"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "811-tickets"
-database_id = "00000000-0000-0000-0000-000000000001"
+database_name = "ayocollect-db"
+database_id = "d1d567d9-a127-43f4-be24-1dd370928b48"
 
 [assets]
 directory = "../frontend"
