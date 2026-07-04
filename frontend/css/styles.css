@@ -569,3 +569,11 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
   padding-top: 1rem;
   border-top: 1px solid var(--border);
 }
+
+.admin-danger-panel {
+  border-color: var(--blocker);
+}
+
+.admin-danger-panel h2 {
+  color: var(--blocker);
+}

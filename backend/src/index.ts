@@ -40,6 +40,7 @@ import {
   removeAdminUser,
   requireAdmin,
 } from './lib/admin';
+import { nukeAllTickets } from './lib/nuke-tickets';
 import { triggerDedicatedScraper } from './lib/scraper-proxy';
 import { createContainerJob, failContainerJob, finalizeStaleContainerJobs } from './lib/container-jobs';
 import { getAutoFetchSettings, isFetchStopped, setSetting } from './lib/settings';
@@ -133,6 +134,11 @@ app.delete('/api/admin/users/:email', adminOnly, async (c) => {
   const removed = await removeAdminUser(c.env.DB, c.env, email);
   if (!removed) return c.json({ error: 'Not found or not removable' }, 404);
   return c.json({ removed: true, email });
+});
+
+app.post('/api/admin/nuke-tickets', adminOnly, async (c) => {
+  const result = await nukeAllTickets(c.env.DB);
+  return c.json({ nuked: true, ...result });
 });
 
 app.get('/api/settings/auto-fetch', adminOnly, async (c) => {

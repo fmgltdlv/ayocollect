@@ -992,6 +992,12 @@ async function renderAdmin() {
       </form>
       <p id="admin-message" class="muted"></p>
     </div>
+    <div class="panel admin-danger-panel">
+      <h2>Danger zone</h2>
+      <p class="muted">Permanently delete all ticket data (Dig Alert, USAN CA, USAN NV). Jobs, settings, and admin users are not affected.</p>
+      <button class="btn-danger" id="nuke-tickets-btn" type="button">Nuke tickets in DB</button>
+      <p id="nuke-message" class="muted"></p>
+    </div>
   `;
 
   async function refreshAdminList() {
@@ -1061,6 +1067,24 @@ async function renderAdmin() {
       await refreshAdminList();
     } catch (err) {
       msg.textContent = err.message;
+    }
+  });
+
+  document.getElementById('nuke-tickets-btn').addEventListener('click', async () => {
+    if (!confirm('Delete ALL tickets from the database? This cannot be undone.')) return;
+    if (!confirm('Last chance — permanently wipe every stored ticket?')) return;
+
+    const btn = document.getElementById('nuke-tickets-btn');
+    const msg = document.getElementById('nuke-message');
+    btn.disabled = true;
+    msg.textContent = 'Deleting…';
+    try {
+      const result = await api.nukeTickets();
+      msg.textContent = `Deleted ${result.total} rows across all ticket tables.`;
+    } catch (err) {
+      msg.textContent = err.message;
+    } finally {
+      btn.disabled = false;
     }
   });
 

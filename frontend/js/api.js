@@ -62,6 +62,7 @@ export const api = {
     request('/admin/users', { method: 'POST', body: JSON.stringify({ email }) }),
   removeAdmin: (email) =>
     request(`/admin/users/${encodeURIComponent(email)}`, { method: 'DELETE' }),
+  nukeTickets: () => request('/admin/nuke-tickets', { method: 'POST' }),
 };
 
 export function badgesHtml(badges) {
