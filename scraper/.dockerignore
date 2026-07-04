@@ -1,0 +1,11 @@
+venv/
+.env
+.git/
+__pycache__/
+*.pyc
+node_modules/
+.wrangler/
+*.md
+systemd/
+install.sh
+push-batch.mjs

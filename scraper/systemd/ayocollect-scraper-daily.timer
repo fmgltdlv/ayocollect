@@ -1,0 +1,9 @@
+[Unit]
+Description=Run ayocollect scraper daily at 06:15 UTC
+
+[Timer]
+OnCalendar=*-*-* 06:15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

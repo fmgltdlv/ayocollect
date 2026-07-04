@@ -6,6 +6,7 @@ import {
 } from '../fetchers';
 import { upsertDigAlert, upsertUsan } from '../db/upsert';
 import { sleep } from '../lib/polygon';
+import { workerScrapingEnabled } from '../lib/ingest-auth';
 import { isFetchStopped, setFetchStopped } from '../lib/settings';
 import {
   addDays,
@@ -542,6 +543,7 @@ export async function continueJobUntilDone(
 
 /** Nudge stalled running jobs via a new HTTP tick (reliable vs waitUntil recovery). */
 export function kickStaleRunningJobs(db: D1Database, env: Env, workerOrigin?: string): void {
+  if (!workerScrapingEnabled(env)) return;
   const origin = resolveWorkerOrigin(workerOrigin, env);
   if (!origin) return;
 
@@ -580,6 +582,7 @@ export async function processBatch(db: D1Database, jobId: number, env: Env): Pro
 }
 
 export async function runCron(db: D1Database, env: Env, ctx: ExecutionContext): Promise<void> {
+  if (!workerScrapingEnabled(env)) return;
   if (await isFetchStopped(db)) return;
 
   const enabled =

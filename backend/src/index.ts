@@ -30,7 +30,10 @@ import {
   stopAllJobs,
 } from './jobs/processor';
 import { buildJobProgress } from './lib/job-progress';
+import { workerScrapingEnabled } from './lib/ingest-auth';
+import { triggerDedicatedScraper } from './lib/scraper-proxy';
 import { getAutoFetchSettings, isFetchStopped, setSetting } from './lib/settings';
+import { ingestRoutes } from './routes/ingest';
 
 type HonoEnv = { Bindings: Env; Variables: {} };
 
@@ -42,7 +45,28 @@ function workerOrigin(c: { req: { url: string } }): string {
 
 app.use('/api/*', cors());
 
-app.get('/api/health', (c) => c.json({ ok: true }));
+app.route('/api/ingest', ingestRoutes);
+
+function scrapingDisabledResponse(c: { env: Env; json: (body: unknown, status?: number) => Response }) {
+  if (workerScrapingEnabled(c.env)) return null;
+  return c.json(
+    {
+      error:
+        'Single-ticket fetch on the Worker is disabled. Use Browse for stored tickets, or run a batch job (triggers the dedicated scraper container).',
+    },
+    503
+  );
+}
+
+app.get('/api/health', (c) =>
+  c.json({
+    ok: true,
+    ingest: !!c.env.INGEST_SECRET,
+    workerScraping: workerScrapingEnabled(c.env),
+    dedicatedScraper: !!c.env.SCRAPER_WORKER_URL?.trim(),
+    scraperWorkerUrl: c.env.SCRAPER_WORKER_URL?.trim() || null,
+  })
+);
 
 app.get('/api/settings/auto-fetch', async (c) => {
   return c.json(await getAutoFetchSettings(c.env.DB));
@@ -81,10 +105,33 @@ app.get('/api/jobs/:id', async (c) => {
 });
 
 app.post('/api/jobs', async (c) => {
-  const body = await c.req.json<{ systems: string[]; startDate: string; endDate: string }>();
+  const body = await c.req.json<{
+    systems: string[];
+    startDate: string;
+    endDate: string;
+    digalertSessionCookies?: string;
+  }>();
   if (!body.systems?.length || !body.startDate || !body.endDate) {
     return c.json({ error: 'systems, startDate, endDate required' }, 400);
   }
+
+  if (!workerScrapingEnabled(c.env)) {
+    try {
+      const result = await triggerDedicatedScraper(c.env, body);
+      return c.json({
+        started: true,
+        dedicatedScraper: true,
+        message:
+          'Scraper container started. Tickets will appear in Browse as batches are ingested (Jobs tab tracks legacy Worker jobs only).',
+        scraper: result.scraper,
+        fetchStopped: await isFetchStopped(c.env.DB),
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return c.json({ error: msg }, 502);
+    }
+  }
+
   const id = await createJob(c.env.DB, body);
   c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx, workerOrigin(c)));
   const job = await getJob(c.env.DB, id);
@@ -206,6 +253,8 @@ app.get('/api/usan-nv/tickets/:ticketNumber', async (c) => {
 });
 
 app.post('/api/digalert/fetch', async (c) => {
+  const blocked = scrapingDisabledResponse(c);
+  if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string; revision?: string }>();
   const payload = await fetchDigAlertRaw(body.ticket, body.revision ?? '00A', c.env);
   if (!payload) return c.json({ error: 'Fetch failed' }, 502);
@@ -215,6 +264,8 @@ app.post('/api/digalert/fetch', async (c) => {
 });
 
 app.post('/api/usan-ca/fetch', async (c) => {
+  const blocked = scrapingDisabledResponse(c);
+  if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string }>();
   const posr = await fetchUsanPosr('ca', body.ticket);
   if (!posr) return c.json({ error: 'Fetch failed' }, 502);
@@ -225,6 +276,8 @@ app.post('/api/usan-ca/fetch', async (c) => {
 });
 
 app.post('/api/usan-nv/fetch', async (c) => {
+  const blocked = scrapingDisabledResponse(c);
+  if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string }>();
   const posr = await fetchUsanPosr('nv', body.ticket);
   if (!posr) return c.json({ error: 'Fetch failed' }, 502);
@@ -238,7 +291,9 @@ app.get('/', (c) =>
   c.json({
     service: 'ayocollect-api',
     health: '/api/health',
+    ingest: '/api/ingest/health',
     ui: 'https://ayocollect-ui.pages.dev',
+    workerScraping: workerScrapingEnabled(c.env),
   })
 );
 

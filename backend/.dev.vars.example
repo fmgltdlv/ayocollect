@@ -1,0 +1,3 @@
+INGEST_SECRET=dev-ingest-secret-change-me
+# ENABLE_WORKER_SCRAPING=true
+# DIGALERT_SESSION_COOKIES={"session":"..."}

@@ -2,15 +2,16 @@
 
 811 ticket analytics for excavators. Fetches ticket detail and dig-site polygons from **USAN** (Northern CA + Nevada) and **DigAlert** (Southern CA), then scores utility response timeliness.
 
-The app runs as a **Cloudflare Worker API** plus a **Cloudflare Pages** frontend. The Worker handles REST routes, ticket fetch jobs, and hourly cron; the UI is static assets deployed separately so frontend changes do not require a backend redeploy. Data is stored in D1.
+The app runs as a **Cloudflare Worker API** plus a **Cloudflare Pages** frontend. Ticket data is **imported in bulk** from a dedicated scraper (VM) via authenticated ingest routes; the Worker upserts into D1 and serves analytics to the UI. Legacy Worker-side scraping (batch jobs, cron) is disabled by default.
 
 ## Architecture
 
 | Component | Location | Role |
 |---|---|---|
-| Worker API | `backend/` | REST API, ticket fetch jobs, scheduled sync |
+| Dedicated scraper | `scraper/` (+ `_811-ref/`) | Scan 811 APIs, POST batches to Worker |
+| Worker API | `backend/` | Ingest, read API, analytics (D1 upsert) |
 | Frontend | `frontend/` | Static UI on Cloudflare Pages (`ayocollect-ui`) |
-| Database | Cloudflare D1 | Ticket data, fetch jobs, settings |
+| Database | Cloudflare D1 | Ticket data, settings |
 
 **Production URLs**
 
@@ -332,20 +333,41 @@ Confirm in the dashboard under **Workers & Pages → 811-ticket-serverless → D
 | View logs / errors | **Workers & Pages → 811-ticket-serverless → Logs** |
 | Add custom domain | **Workers & Pages → 811-ticket-serverless → Settings → Domains & Routes → Add** |
 
+## Ingest API (scraper → Worker)
+
+See `scraper/README.md` for batch formats and the `push-batch.mjs` test client.
+
+```bash
+cd backend
+npx wrangler secret put INGEST_SECRET
+npm run deploy
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/ingest/digalert` | Bulk Dig Alert payloads |
+| `POST /api/ingest/usan-ca` | Bulk USAN CA payloads + optional polygon WKT |
+| `POST /api/ingest/usan-nv` | Bulk USAN NV payloads + optional polygon WKT |
+
+Auth: `Authorization: Bearer <INGEST_SECRET>`. Max 100 tickets per request.
+
 ## Configuration
 
 | Setting | Description |
 |---|---|
-| `DIGALERT_SESSION_COOKIES` | JSON cookie object for authenticated DigAlert API access (Worker secret) |
-| Auto-fetch settings | Configured in the UI under Settings; stored in D1 `app_settings` |
-
-The hourly cron trigger (`0 * * * *` UTC) runs automatic fetch jobs when auto-fetch is enabled in app settings.
+| `INGEST_SECRET` | Bearer token for `/api/ingest/*` (Worker secret) — **required for scraper import** |
+| `ENABLE_WORKER_SCRAPING` | `true` to re-enable legacy Worker batch jobs / cron / Fetch tab (default `false`) |
+| `DIGALERT_SESSION_COOKIES` | Only if `ENABLE_WORKER_SCRAPING=true` |
+| `WORKER_URL` | Only if `ENABLE_WORKER_SCRAPING=true` |
+| Auto-fetch settings | D1 `app_settings`; ignored unless Worker scraping enabled |
 
 ## Project layout
 
 ```
-backend/          Cloudflare Worker (Hono API + cron)
+backend/          Cloudflare Worker (ingest + read API)
   migrations/     D1 schema migrations
   src/            Worker source
+scraper/          Scraper docs + batch push helper
+_811-ref/         Reference Python scraper code
 frontend/         Static HTML/CSS/JS (Cloudflare Pages)
 ```

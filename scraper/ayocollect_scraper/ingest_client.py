@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import time
+from datetime import datetime, timezone
+from typing import Any
+
+import requests
+
+INGEST_PATHS = {
+    "digalert": "/api/ingest/digalert",
+    "usan-ca": "/api/ingest/usan-ca",
+    "usan-nv": "/api/ingest/usan-nv",
+}
+
+
+class IngestError(Exception):
+    pass
+
+
+def post_batch(
+    worker_url: str,
+    ingest_secret: str,
+    system: str,
+    batch_id: str,
+    tickets: list[Any],
+    scraped_at: str | None = None,
+    retries: int = 3,
+) -> dict[str, Any]:
+    if system not in INGEST_PATHS:
+        raise ValueError(f"Unknown system {system}")
+
+    path = INGEST_PATHS[system]
+    url = f"{worker_url.rstrip('/')}{path}"
+    body = {
+        "batchId": batch_id,
+        "scrapedAt": scraped_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "tickets": tickets,
+    }
+    headers = {
+        "Authorization": f"Bearer {ingest_secret}",
+        "Content-Type": "application/json",
+    }
+
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.post(url, json=body, headers=headers, timeout=120)
+            data = resp.json() if resp.content else {}
+            if not resp.ok:
+                raise IngestError(f"HTTP {resp.status_code}: {data}")
+            return data
+        except (requests.RequestException, IngestError, ValueError) as e:
+            last_err = e
+            if attempt < retries:
+                time.sleep(0.5 * attempt)
+    raise IngestError(str(last_err))
+
+
+def check_ingest_health(worker_url: str, ingest_secret: str) -> dict[str, Any]:
+    url = f"{worker_url.rstrip('/')}/api/ingest/health"
+    resp = requests.get(
+        url,
+        headers={"Authorization": f"Bearer {ingest_secret}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()

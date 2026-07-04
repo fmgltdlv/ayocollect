@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT / ".env")
+
+
+def _bool(val: str | None, default: bool = False) -> bool:
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+@dataclass
+class Settings:
+    worker_url: str
+    ingest_secret: str
+    throttle_sec: float
+    ingest_batch_size: int
+    max_tickets_per_day: int
+    consecutive_miss_limit: int
+    systems: list[str]
+    digalert_cookies: dict[str, str]
+    api_host: str
+    api_port: int
+    api_key: str | None
+
+
+def load_settings() -> Settings:
+    worker_url = os.getenv("WORKER_URL", "http://127.0.0.1:8787").rstrip("/")
+    ingest_secret = os.getenv("INGEST_SECRET", "").strip()
+    if not ingest_secret:
+        raise RuntimeError("INGEST_SECRET is required — set it in scraper/.env")
+
+    raw_systems = os.getenv("SYSTEMS", "digalert,usan-ca,usan-nv")
+    systems = [s.strip() for s in raw_systems.split(",") if s.strip()]
+
+    cookies_raw = os.getenv("DIGALERT_SESSION_COOKIES", "").strip()
+    digalert_cookies: dict[str, str] = {}
+    if cookies_raw:
+        try:
+            parsed = json.loads(cookies_raw)
+            if isinstance(parsed, dict):
+                digalert_cookies = {str(k): str(v) for k, v in parsed.items()}
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Invalid DIGALERT_SESSION_COOKIES JSON: {e}") from e
+
+    return Settings(
+        worker_url=worker_url,
+        ingest_secret=ingest_secret,
+        throttle_sec=float(os.getenv("THROTTLE_SEC", "0.15")),
+        ingest_batch_size=int(os.getenv("INGEST_BATCH_SIZE", "50")),
+        max_tickets_per_day=int(os.getenv("MAX_TICKETS_PER_DAY", "3999")),
+        consecutive_miss_limit=int(os.getenv("CONSECUTIVE_MISS_LIMIT", "2")),
+        systems=systems,
+        digalert_cookies=digalert_cookies,
+        api_host=os.getenv("SCRAPER_API_HOST", "0.0.0.0"),
+        api_port=int(os.getenv("SCRAPER_API_PORT", "8789")),
+        api_key=os.getenv("SCRAPER_API_KEY") or None,
+    )

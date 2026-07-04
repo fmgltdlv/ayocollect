@@ -1,8 +1,16 @@
 export type Env = {
   DB: D1Database;
   DIGALERT_SESSION_COOKIES?: string;
-  /** Public Worker URL for self-fetch job chaining (cron / background). */
+  /** Bearer token for POST /api/ingest/* (scraper → Worker). Set via Worker secret. */
+  INGEST_SECRET?: string;
+  /** When false, Worker does not run batch jobs, cron scrape, or outbound 811 fetches. */
+  ENABLE_WORKER_SCRAPING?: string;
+  /** Public Worker URL for self-fetch job chaining (legacy; only if ENABLE_WORKER_SCRAPING). */
   WORKER_URL?: string;
+  /** Dedicated scraper Worker (Cloudflare Container) — UI batch jobs proxy here when worker scraping is off. */
+  SCRAPER_WORKER_URL?: string;
+  /** Optional Bearer token for POST {SCRAPER_WORKER_URL}/run */
+  SCRAPER_RUN_SECRET?: string;
 };
 
 export type TicketSystem = 'digalert' | 'usan-ca' | 'usan-nv';

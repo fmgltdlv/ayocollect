@@ -1,0 +1,24 @@
+name = "ayocollect-scraper"
+main = "src/index.ts"
+compatibility_date = "2026-07-02"
+
+# Daily scrape at 14:00 UTC (~7am PT)
+[triggers]
+crons = ["0 14 * * *"]
+
+[vars]
+WORKER_URL = "https://ayocollect.thefieldmappinggroup.workers.dev"
+SYSTEMS = "digalert,usan-ca,usan-nv"
+[[containers]]
+class_name = "ScraperContainer"
+image = "./Dockerfile"
+instance_type = "lite"
+max_instances = 1
+
+[[durable_objects.bindings]]
+name = "SCRAPER"
+class_name = "ScraperContainer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ScraperContainer"]
