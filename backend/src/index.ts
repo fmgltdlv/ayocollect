@@ -13,8 +13,10 @@ import {
   enrichListWithBadges,
   getDigAlertDetail,
   getUsanDetail,
+  listMapPointsMulti,
   listTickets,
   listTicketsMulti,
+  loadTicketPolygons,
 } from './db/queries';
 import { getAnalyticsSummary, getAnalyticsTrends, getOverlapHotspots } from './db/analytics-queries';
 import { rebuildOverlapsBatch, listOverlapsForTicket, runOverlapMaintenance } from './lib/overlaps';
@@ -338,6 +340,27 @@ app.get('/api/tickets', async (c) => {
   const { tickets: rows, total, limit, offset } = await listTicketsMulti(c.env.DB, systems, params);
   const tickets = await enrichListWithBadges(c.env.DB, systems[0], rows);
   return c.json({ tickets, total, limit, offset });
+});
+
+app.get('/api/tickets/map-points', async (c) => {
+  const systems = parseSystems(c.req.query.bind(c.req));
+  if (!systems.length) {
+    return c.json({ error: 'At least one system required (systems=digalert,usan-ca,usan-nv)' }, 400);
+  }
+  const params = listQuery(c);
+  const { points, capped } = await listMapPointsMulti(c.env.DB, systems, params);
+  return c.json({ points, capped, total: points.length });
+});
+
+app.post('/api/tickets/polygons', async (c) => {
+  const body = await c.req.json<{ tickets?: { system: TicketSystem; ticketNumber: string; revision?: string }[] }>();
+  if (!body.tickets?.length) {
+    return c.json({ error: 'tickets required' }, 400);
+  }
+  const valid = new Set<TicketSystem>(['digalert', 'usan-ca', 'usan-nv']);
+  const refs = body.tickets.filter((t) => valid.has(t.system)).slice(0, 100);
+  const polygons = await loadTicketPolygons(c.env.DB, refs);
+  return c.json({ polygons });
 });
 
 app.get('/api/analytics/summary', async (c) => {

@@ -36,6 +36,10 @@ let state = {
   ticketPolygonGroup: null,
   browseMapMode: null,
   browseMapTickets: [],
+  browsePageTickets: [],
+  browseMapCapped: false,
+  browsePolygonByKey: {},
+  browsePolygonLoading: false,
   jobsPollId: null,
 };
 
@@ -268,29 +272,102 @@ function browseFiltersFromDom() {
   return params;
 }
 
-function renderBrowseResults(tickets, total, page) {
+function ticketPolygonKey(ticket) {
+  const ticketNumber = ticket.ticket_number ?? ticket.ticketNumber;
+  return `${ticket.system}:${ticketNumber}:${ticket.revision ?? '00A'}`;
+}
+
+function browseTicketFetchBody(system, ticketNumber, revision) {
+  return system === 'digalert'
+    ? { ticket: ticketNumber, revision: revision || '00A' }
+    : { ticket: ticketNumber };
+}
+
+async function refreshSelectedBrowseTickets() {
   const resultsEl = document.getElementById('results');
-  updateBrowseMapTickets(tickets);
+  const btn = document.getElementById('browse-refresh-selected');
+  const statusEl = document.getElementById('browse-refresh-status');
+  const selected = [...resultsEl.querySelectorAll('.ticket-refresh-cb:checked')].map((cb) => cb.closest('tr'));
+  if (!selected.length) {
+    if (statusEl) statusEl.textContent = 'Select one or more tickets to refresh.';
+    return;
+  }
+
+  const prevLabel = btn?.textContent ?? 'Refresh selected';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Refreshing…';
+  }
+  if (statusEl) statusEl.textContent = '';
+
+  let ok = 0;
+  let failed = 0;
+  for (let i = 0; i < selected.length; i++) {
+    const tr = selected[i];
+    const { system, ticket, revision } = tr.dataset;
+    if (statusEl) {
+      statusEl.textContent = `Refreshing ${i + 1} of ${selected.length}: ${ticket}…`;
+    }
+    try {
+      await api.fetchOne(system, browseTicketFetchBody(system, ticket, revision));
+      ok += 1;
+    } catch (e) {
+      failed += 1;
+      if (statusEl) {
+        statusEl.textContent = `Failed ${ticket}: ${e.message}. Continuing…`;
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = prevLabel;
+  }
+  if (statusEl) {
+    statusEl.textContent =
+      failed === 0
+        ? `Refreshed ${ok} ticket${ok === 1 ? '' : 's'}.`
+        : `Refreshed ${ok}, failed ${failed}.`;
+  }
+  await runBrowseSearch(state.browsePage);
+}
+
+function renderBrowseResults(tickets, total, page, fitMap = false) {
+  const resultsEl = document.getElementById('results');
+  state.browsePageTickets = tickets;
+  refreshBrowseMap(fitMap);
   if (!tickets.length) {
     resultsEl.textContent = 'No tickets found.';
+    refreshBrowseMap(false);
     return;
   }
 
   const start = page * BROWSE_PAGE_SIZE + 1;
   const end = Math.min(start + tickets.length - 1, total);
   const multiSystem = state.browseSystems.length > 1;
+  const adminRefresh = state.isAdmin;
 
   resultsEl.innerHTML = `
     <div class="browse-meta">
       <span class="muted">Showing ${start}–${end} of ${total}</span>
-      <div class="pagination">
-        <button class="btn btn-secondary" id="browse-prev" type="button" ${page === 0 ? 'disabled' : ''}>Previous</button>
-        <span class="muted">Page ${page + 1} of ${Math.max(1, Math.ceil(total / BROWSE_PAGE_SIZE))}</span>
-        <button class="btn btn-secondary" id="browse-next" type="button" ${end >= total ? 'disabled' : ''}>Next</button>
+      <div class="browse-meta-actions">
+        ${
+          adminRefresh
+            ? `<button class="btn btn-secondary" id="browse-refresh-selected" type="button">Refresh selected</button>
+        <span id="browse-refresh-status" class="muted browse-refresh-status"></span>`
+            : ''
+        }
+        <div class="pagination">
+          <button class="btn btn-secondary" id="browse-prev" type="button" ${page === 0 ? 'disabled' : ''}>Previous</button>
+          <span class="muted">Page ${page + 1} of ${Math.max(1, Math.ceil(total / BROWSE_PAGE_SIZE))}</span>
+          <button class="btn btn-secondary" id="browse-next" type="button" ${end >= total ? 'disabled' : ''}>Next</button>
+        </div>
       </div>
     </div>
     <table>
       <thead><tr>
+        ${adminRefresh ? '<th class="ticket-refresh-col"><input type="checkbox" id="browse-select-all" title="Select all on this page" aria-label="Select all tickets on this page" /></th>' : ''}
         <th>Badges</th>${multiSystem ? '<th>System</th>' : ''}<th>Ticket</th><th>Summary</th><th>Updated</th>
       </tr></thead>
       <tbody>
@@ -298,6 +375,11 @@ function renderBrowseResults(tickets, total, page) {
           .map(
             (t) => `
           <tr class="clickable" data-system="${t.system}" data-ticket="${t.ticket_number}" data-revision="${t.revision ?? '00A'}">
+            ${
+              adminRefresh
+                ? `<td class="ticket-refresh-col"><input type="checkbox" class="ticket-refresh-cb" aria-label="Select ticket ${t.ticket_number} for refresh" /></td>`
+                : ''
+            }
             <td>${badgesHtml(t.badges)}</td>
             ${multiSystem ? `<td>${systemLabel(t.system)}</td>` : ''}
             <td class="mono">${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}</td>
@@ -317,6 +399,30 @@ function renderBrowseResults(tickets, total, page) {
       runBrowseSearch(state.browsePage + 1);
     }
   });
+
+  if (adminRefresh) {
+    const selectAll = document.getElementById('browse-select-all');
+    const rowChecks = [...resultsEl.querySelectorAll('.ticket-refresh-cb')];
+
+    selectAll?.addEventListener('change', () => {
+      rowChecks.forEach((cb) => {
+        cb.checked = selectAll.checked;
+      });
+    });
+
+    rowChecks.forEach((cb) => {
+      cb.addEventListener('change', () => {
+        if (!selectAll) return;
+        selectAll.checked = rowChecks.length > 0 && rowChecks.every((item) => item.checked);
+        selectAll.indeterminate =
+          rowChecks.some((item) => item.checked) && !rowChecks.every((item) => item.checked);
+      });
+      cb.addEventListener('click', (e) => e.stopPropagation());
+    });
+
+    selectAll?.addEventListener('click', (e) => e.stopPropagation());
+    document.getElementById('browse-refresh-selected')?.addEventListener('click', refreshSelectedBrowseTickets);
+  }
 
   resultsEl.querySelectorAll('tr.clickable').forEach((tr) => {
     tr.addEventListener('click', () =>
@@ -367,7 +473,8 @@ function renderBrowse() {
           </div>
         </div>
         <div class="map-section">
-          <p class="map-hint">Draw a rectangle to filter by area. Zoom out for clusters, mid zoom for pins, zoom in (17+) for ticket polygons.</p>
+          <p class="map-hint">Map shows all matching tickets from selected systems (blue Dig Alert, green USAN CA, orange USAN NV). Draw a rectangle to filter by area. Zoom out for clusters, zoom in (17+) for polygons on the current page.</p>
+          <div id="browse-map-legend" class="browse-map-legend hidden" aria-hidden="true"></div>
           <div id="search-map"></div>
         </div>
       </div>
@@ -395,6 +502,9 @@ function initSearchMap() {
   state.browseMapMode = null;
   state.drawLayer = null;
   state.browseMapTickets = [];
+  state.browsePageTickets = [];
+  state.browsePolygonByKey = {};
+  state.browseMapCapped = false;
 
   state.searchMap = L.map('search-map').setView([36.16, -115.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -438,7 +548,10 @@ function initSearchMap() {
     state.drawLayer = null;
   });
 
-  state.searchMap.on('zoomend', () => renderBrowseMapTickets(false));
+  state.searchMap.on('zoomend', () => {
+    renderBrowseMapTickets(false);
+    void maybeLoadBrowsePolygons();
+  });
 }
 
 const BROWSE_SYSTEM_COLORS = {
@@ -481,32 +594,62 @@ function browsePinSize(zoom) {
   return Math.round(Math.min(52, Math.max(30, 68 - zoom * 1.1)));
 }
 
+function browseClusterStyle(counts) {
+  const entries = Object.entries(counts).filter(([, n]) => n > 0);
+  const total = entries.reduce((sum, [, n]) => sum + n, 0);
+  if (entries.length === 1) {
+    return {
+      total,
+      style: `background:${BROWSE_SYSTEM_COLORS[entries[0][0]]}`,
+    };
+  }
+  let pct = 0;
+  const stops = [];
+  for (const [system, count] of entries) {
+    const start = pct;
+    pct += (count / total) * 100;
+    stops.push(`${BROWSE_SYSTEM_COLORS[system]} ${start}% ${pct}%`);
+  }
+  return {
+    total,
+    style: `background:conic-gradient(${stops.join(', ')})`,
+  };
+}
+
 function browseClusterIcon(cluster) {
-  const count = cluster.getChildCount();
+  const counts = { digalert: 0, 'usan-ca': 0, 'usan-nv': 0 };
+  cluster.getAllChildMarkers().forEach((marker) => {
+    const system = marker.options.browseSystem;
+    if (system && counts[system] !== undefined) counts[system]++;
+  });
+  const { total, style } = browseClusterStyle(counts);
+  const count = total || cluster.getChildCount();
   let sizeClass = 'browse-cluster-sm';
   if (count >= 25) sizeClass = 'browse-cluster-lg';
   else if (count >= 10) sizeClass = 'browse-cluster-md';
   return L.divIcon({
-    html: `<span class="browse-cluster ${sizeClass}">${count}</span>`,
+    html: `<span class="browse-cluster ${sizeClass}" style="${style}">${count}</span>`,
     className: 'browse-cluster-icon',
     iconSize: L.point(44, 44),
   });
 }
 
 function browseMapModeForZoom(zoom) {
-  return zoom >= BROWSE_ZOOM_POLYGONS_FROM ? 'polygons' : 'markers';
+  return zoom >= BROWSE_ZOOM_POLYGONS_FROM ? 'hybrid' : 'markers';
 }
 
 function setBrowseMapTicketLayer(mode) {
-  if (state.browseMapMode === mode) return;
-  if (state.ticketClusterGroup) state.searchMap.removeLayer(state.ticketClusterGroup);
-  if (state.ticketPolygonGroup) state.searchMap.removeLayer(state.ticketPolygonGroup);
+  if (!state.searchMap) return;
+  const wantCluster = mode === 'markers' || mode === 'hybrid';
+  const wantPolygons = mode === 'hybrid';
+  const hasCluster = state.searchMap.hasLayer(state.ticketClusterGroup);
+  const hasPolygons = state.searchMap.hasLayer(state.ticketPolygonGroup);
+
+  if (wantCluster && !hasCluster) state.searchMap.addLayer(state.ticketClusterGroup);
+  if (!wantCluster && hasCluster) state.searchMap.removeLayer(state.ticketClusterGroup);
+  if (wantPolygons && !hasPolygons) state.searchMap.addLayer(state.ticketPolygonGroup);
+  if (!wantPolygons && hasPolygons) state.searchMap.removeLayer(state.ticketPolygonGroup);
   state.browseMapMode = mode;
-  if (mode === 'polygons') {
-    state.searchMap.addLayer(state.ticketPolygonGroup);
-  } else {
-    state.searchMap.addLayer(state.ticketClusterGroup);
-  }
 }
 
 function createBrowseTicketPin(ticket, latlng, color, label, zoom) {
@@ -517,7 +660,7 @@ function createBrowseTicketPin(ticket, latlng, color, label, zoom) {
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
-  const marker = L.marker(latlng, { icon });
+  const marker = L.marker(latlng, { icon, browseSystem: ticket.system });
   bindBrowseTicketLayer(marker, ticket, label);
   return marker;
 }
@@ -551,13 +694,16 @@ function renderBrowseMapTickets(fitBounds = false) {
   state.ticketClusterGroup.clearLayers();
   state.ticketPolygonGroup.clearLayers();
   const boundsLayers = [];
+  const pageKeys = new Set(state.browsePageTickets.map(ticketPolygonKey));
 
   for (const t of state.browseMapTickets) {
     const color = BROWSE_SYSTEM_COLORS[t.system] ?? '#3b82f6';
     const label = `${systemLabel(t.system)} — ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
-    const latlngs = parseWktToLatLngs(t.polygon_wkt);
+    const key = ticketPolygonKey(t);
+    const polygonWkt = state.browsePolygonByKey[key] ?? t.polygon_wkt;
+    const latlngs = parseWktToLatLngs(polygonWkt);
 
-    if (mode === 'polygons' && latlngs.length) {
+    if (mode === 'hybrid' && pageKeys.has(key) && latlngs.length) {
       const poly = createBrowseTicketPolygon(t, latlngs, color, label);
       state.ticketPolygonGroup.addLayer(poly);
       boundsLayers.push(poly);
@@ -586,16 +732,74 @@ function renderBrowseMapTickets(fitBounds = false) {
   }
 }
 
-function updateBrowseMapTickets(tickets) {
-  state.browseMapTickets = tickets;
-  renderBrowseMapTickets(true);
+function updateBrowseMapLegend() {
+  const legend = document.getElementById('browse-map-legend');
+  if (!legend) return;
+  const systems = [...new Set(state.browseMapTickets.map((t) => t.system))];
+  if (!systems.length) {
+    legend.classList.add('hidden');
+    legend.innerHTML = '';
+    return;
+  }
+  legend.classList.remove('hidden');
+  legend.innerHTML = systems
+    .map(
+      (system) =>
+        `<span class="browse-legend-item"><span class="browse-legend-swatch" style="background:${BROWSE_SYSTEM_COLORS[system]}"></span>${systemLabel(system)}</span>`
+    )
+    .join('');
+  if (state.browseMapCapped) {
+    legend.innerHTML += '<span class="browse-legend-capped muted">Map capped at 5,000 tickets — zoom in or narrow filters.</span>';
+  }
+}
+
+async function maybeLoadBrowsePolygons() {
+  if (state.browsePolygonLoading) return;
+  if (!state.searchMap || state.searchMap.getZoom() < BROWSE_ZOOM_POLYGONS_FROM) return;
+  if (!state.browsePageTickets.length) return;
+
+  const needed = state.browsePageTickets.filter((ticket) => !state.browsePolygonByKey[ticketPolygonKey(ticket)]);
+  if (!needed.length) return;
+
+  state.browsePolygonLoading = true;
+  try {
+    const { polygons } = await api.browseTicketPolygons(
+      needed.map((ticket) => ({
+        system: ticket.system,
+        ticketNumber: ticket.ticket_number,
+        revision: ticket.revision ?? '00A',
+      }))
+    );
+    for (const row of polygons) {
+      state.browsePolygonByKey[ticketPolygonKey(row)] = row.polygon_wkt;
+    }
+    renderBrowseMapTickets(false);
+  } catch {
+    /* polygons optional */
+  } finally {
+    state.browsePolygonLoading = false;
+  }
+}
+
+function refreshBrowseMap(fitBounds = false) {
+  updateBrowseMapLegend();
+  renderBrowseMapTickets(fitBounds);
+  void maybeLoadBrowsePolygons();
+}
+
+function clearBrowseMap() {
+  state.browseMapTickets = [];
+  state.browsePageTickets = [];
+  state.browsePolygonByKey = {};
+  state.browseMapCapped = false;
+  refreshBrowseMap(false);
 }
 
 async function runBrowseSearch(page = 0) {
   const systems = browseSystemsFromDom();
   if (!systems.length) {
     document.getElementById('results').textContent = 'Select at least one system.';
-    updateBrowseMapTickets([]);
+    clearBrowseMap();
     return;
   }
 
@@ -615,12 +819,21 @@ async function runBrowseSearch(page = 0) {
   const resultsEl = document.getElementById('results');
   resultsEl.textContent = 'Loading…';
   try {
-    const { tickets, total } = await api.browseTickets(systems, params);
-    state.browseTotal = total;
-    renderBrowseResults(tickets, total, page);
+    const requests = [api.browseTickets(systems, params)];
+    if (page === 0) {
+      requests.push(api.browseMapPoints(systems, state.browseParams));
+    }
+    const [browseResult, mapResult] = await Promise.all(requests);
+    if (mapResult) {
+      state.browseMapTickets = mapResult.points;
+      state.browseMapCapped = !!mapResult.capped;
+      state.browsePolygonByKey = {};
+    }
+    state.browseTotal = browseResult.total;
+    renderBrowseResults(browseResult.tickets, browseResult.total, page, page === 0);
   } catch (e) {
     resultsEl.textContent = e.message;
-    updateBrowseMapTickets([]);
+    clearBrowseMap();
   }
 }
 

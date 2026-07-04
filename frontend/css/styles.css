@@ -441,6 +441,32 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
   margin-bottom: 0.75rem;
 }
 
+.browse-meta-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.browse-refresh-status {
+  font-size: 0.85rem;
+  max-width: 20rem;
+}
+
+.ticket-refresh-col {
+  width: 2.25rem;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.ticket-refresh-col input {
+  cursor: pointer;
+}
+
+tr.clickable td.ticket-refresh-col {
+  cursor: default;
+}
+
 .pagination {
   display: flex;
   align-items: center;
@@ -640,6 +666,38 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
   margin: 0;
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+.browse-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  align-items: center;
+  margin-top: 0.55rem;
+  font-size: 0.78rem;
+}
+
+.browse-map-legend.hidden {
+  display: none;
+}
+
+.browse-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.browse-legend-swatch {
+  width: 0.72rem;
+  height: 0.72rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  box-shadow: 0 0 0 1px rgba(15, 20, 25, 0.45);
+}
+
+.browse-legend-capped {
+  width: 100%;
+  font-size: 0.75rem;
 }
 
 .browse-pin-icon {
