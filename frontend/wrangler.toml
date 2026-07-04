@@ -1,3 +1,5 @@
 name = "ayocollect-ui"
 compatibility_date = "2024-11-01"
 pages_build_output_dir = "."
+# Custom domain (dashboard or: wrangler pages domain add 811view.ayowerks.com --project-name=ayocollect-ui)
+# UI: https://811view.ayowerks.com

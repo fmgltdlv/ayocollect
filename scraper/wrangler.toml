@@ -2,6 +2,10 @@ name = "ayocollect-scraper"
 main = "src/index.ts"
 compatibility_date = "2026-07-02"
 
+[[routes]]
+pattern = "811scrape.ayowerks.com"
+custom_domain = true
+
 # Daily scrape at 14:00 UTC (~7am PT)
 [triggers]
 crons = ["0 14 * * *"]
@@ -14,7 +18,7 @@ invocation_logs = true
 head_sampling_rate = 1
 
 [vars]
-WORKER_URL = "https://ayocollect.thefieldmappinggroup.workers.dev"
+WORKER_URL = "https://811viewapi.ayowerks.com"
 SYSTEMS = "digalert,usan-ca,usan-nv"
 [[containers]]
 class_name = "ScraperContainer"

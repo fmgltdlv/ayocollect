@@ -291,8 +291,9 @@ app.get('/', (c) =>
     service: 'ayocollect-api',
     health: '/api/health',
     ingest: '/api/ingest/health',
-    ui: 'https://ayocollect-ui.pages.dev',
+    ui: 'https://811view.ayowerks.com',
     workerScraping: workerScrapingEnabled(c.env),
+    scraperWorkerUrl: c.env.SCRAPER_WORKER_URL?.trim() || null,
   })
 );
 

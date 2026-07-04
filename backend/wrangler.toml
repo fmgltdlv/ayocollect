@@ -2,6 +2,10 @@ name = "ayocollect"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
 
+[[routes]]
+pattern = "811viewapi.ayowerks.com"
+custom_domain = true
+
 [[d1_databases]]
 binding = "DB"
 database_name = "ayocollect-db"
@@ -17,13 +21,12 @@ enabled = true
 invocation_logs = true
 head_sampling_rate = 1
 
-# Public URL of this Worker — needed for cron/auto-fetch jobs to chain in the background.
-# Example: https://811-ticket-serverless.<your-subdomain>.workers.dev
+# Public URLs (custom domains on ayowerks.com)
 [vars]
-WORKER_URL = "https://ayocollect.thefieldmappinggroup.workers.dev"
+WORKER_URL = "https://811viewapi.ayowerks.com"
 # Dedicated scraper pushes batches to /api/ingest/* — keep Worker scraping off by default.
 ENABLE_WORKER_SCRAPING = "false"
-SCRAPER_WORKER_URL = "https://ayocollect-scraper.thefieldmappinggroup.workers.dev"
+SCRAPER_WORKER_URL = "https://811scrape.ayowerks.com"
 
 [[secrets_store_secrets]]
 binding = "INGEST_SECRET"

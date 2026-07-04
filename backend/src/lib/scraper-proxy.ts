@@ -17,6 +17,13 @@ export async function triggerDedicatedScraper(
     );
   }
 
+  const apiOrigin = env.WORKER_URL?.trim().replace(/\/$/, '');
+  if (apiOrigin && base === apiOrigin) {
+    throw new Error(
+      'SCRAPER_WORKER_URL points at the API Worker. Set it to the scraper Worker (https://811scrape.ayowerks.com).'
+    );
+  }
+
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (env.SCRAPER_RUN_SECRET) {
     headers.Authorization = `Bearer ${env.SCRAPER_RUN_SECRET}`;
@@ -28,21 +35,35 @@ export async function triggerDedicatedScraper(
     systems: body.systems,
   };
 
-  const resp = await fetch(`${base}/run`, {
+  const runUrl = `${base}/run`;
+  const resp = await fetch(runUrl, {
     method: 'POST',
     headers,
     body: JSON.stringify(payload),
   });
 
-  const data = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+  const text = await resp.text();
+  let data: Record<string, unknown> = {};
+  try {
+    data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    data = { raw: text.slice(0, 200) };
+  }
+
   if (!resp.ok) {
-    const msg =
+    const detail =
       typeof data.message === 'string'
         ? data.message
         : typeof data.error === 'string'
           ? data.error
-          : `Scraper returned HTTP ${resp.status}`;
-    throw new Error(msg);
+          : typeof data.raw === 'string'
+            ? data.raw
+            : text.slice(0, 200) || undefined;
+    throw new Error(
+      detail
+        ? `Scraper error (${resp.status} from ${runUrl}): ${detail}`
+        : `Scraper returned HTTP ${resp.status} from ${runUrl} — verify SCRAPER_WORKER_URL is https://811scrape.ayowerks.com`
+    );
   }
 
   return { ok: true, scraper: data };

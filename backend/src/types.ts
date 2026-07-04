@@ -6,7 +6,7 @@ export type SecretsStoreBinding = {
 export type Env = {
   DB: D1Database;
   /** Bearer token for POST /api/ingest/* (scraper → Worker). Secrets Store binding. */
-  INGEST_SECRET: SecretsStoreBinding;
+  INGEST_SECRET?: SecretsStoreBinding;
   /** When false, Worker does not run batch jobs, cron scrape, or outbound 811 fetches. */
   ENABLE_WORKER_SCRAPING?: string;
   /** Public Worker URL for self-fetch job chaining (legacy; only if ENABLE_WORKER_SCRAPING). */

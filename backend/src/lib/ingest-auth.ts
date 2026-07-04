@@ -4,8 +4,13 @@ import type { Env } from '../types';
 type IngestEnv = { Bindings: Env };
 
 export async function getIngestSecret(env: Env): Promise<string | null> {
-  const secret = (await env.INGEST_SECRET.get())?.trim();
-  return secret || null;
+  if (!env.INGEST_SECRET?.get) return null;
+  try {
+    const secret = (await env.INGEST_SECRET.get())?.trim();
+    return secret || null;
+  } catch {
+    return null;
+  }
 }
 
 export function requireIngestSecret(): MiddlewareHandler<IngestEnv> {

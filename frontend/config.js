@@ -1,2 +1,2 @@
-/** Production API (Cloudflare Worker). Override in config.local.js for local dev. */
-window.AYO_API_BASE = 'https://ayocollect.thefieldmappinggroup.workers.dev/api';
+/** Production API — https://811viewapi.ayowerks.com (UI: https://811view.ayowerks.com) */
+window.AYO_API_BASE = 'https://811viewapi.ayowerks.com/api';
