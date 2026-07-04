@@ -25,6 +25,8 @@ let state = {
   browseBadges: [],
   detail: null,
   detailSystem: null,
+  analytics: null,
+  analyticsMap: null,
   searchMap: null,
   detailMap: null,
   drawLayer: null,
@@ -158,12 +160,7 @@ const DIGALERT_INFO_SECTIONS = [
   },
   {
     title: 'Record',
-    fields: [
-      { key: 'fetch_status', label: 'Fetch status' },
-      { key: 'fetch_error', label: 'Fetch error' },
-      { key: 'created_at', label: 'Created' },
-      { key: 'updated_at', label: 'Updated' },
-    ],
+    fields: [{ key: 'updated_at', label: 'Updated' }],
   },
 ];
 
@@ -901,6 +898,212 @@ async function showJobProgress(jobId) {
   }
 }
 
+async function renderAnalytics() {
+  app.innerHTML = '<div class="panel">Loading analytics…</div>';
+  try {
+    const [summary, trends, hotspotsData] = await Promise.all([
+      api.analyticsSummary(),
+      api.analyticsTrends({ days: 30 }),
+      api.analyticsOverlaps({ limit: 20 }).catch(() => ({ hotspots: [] })),
+    ]);
+    state.analytics = { summary, trends, hotspots: hotspotsData.hotspots ?? [] };
+  } catch (e) {
+    app.innerHTML = `<div class="panel">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  const { summary, trends, hotspots } = state.analytics;
+  const t = summary.totals;
+
+  app.innerHTML = `
+    <div class="panel">
+      <h2 class="panel-heading">Analytics</h2>
+      <p class="muted">As of ${escapeHtml(summary.today)} · active = work window includes today</p>
+      <div class="kpi-grid">
+        <div class="kpi-card"><span class="kpi-label">Active</span><span class="kpi-value">${t.active.toLocaleString()}</span></div>
+        <div class="kpi-card"><span class="kpi-label">Pending</span><span class="kpi-value kpi-pending">${t.pending.toLocaleString()}</span></div>
+        <div class="kpi-card"><span class="kpi-label">Blockers</span><span class="kpi-value kpi-blocker">${t.blockers.toLocaleString()}</span></div>
+        <div class="kpi-card"><span class="kpi-label">Late</span><span class="kpi-value kpi-late">${t.late.toLocaleString()}</span></div>
+        <div class="kpi-card"><span class="kpi-label">Total stored</span><span class="kpi-value">${t.total.toLocaleString()}</span></div>
+        <div class="kpi-card"><span class="kpi-label">Geometry</span><span class="kpi-value">${t.geometryCoveragePct}%</span></div>
+        <div class="kpi-card"><span class="kpi-label">Overlaps</span><span class="kpi-value">${(summary.overlaps?.total ?? 0).toLocaleString()}</span></div>
+        <div class="kpi-card"><span class="kpi-label">Concurrent overlaps</span><span class="kpi-value">${(summary.overlaps?.concurrent ?? 0).toLocaleString()}</span></div>
+      </div>
+    </div>
+    <div class="analytics-grid">
+      <div class="panel">
+        <h3>By system</h3>
+        <table>
+          <thead><tr><th>System</th><th>Total</th><th>Active</th><th>Pending</th><th>Blockers</th><th>Late</th><th>Geometry</th></tr></thead>
+          <tbody>
+            ${summary.bySystem
+              .map(
+                (s) => `
+              <tr>
+                <td>${systemLabel(s.system)}</td>
+                <td>${s.total.toLocaleString()}</td>
+                <td>${s.active.toLocaleString()}</td>
+                <td>${s.badges.pending.toLocaleString()}</td>
+                <td>${s.badges.blocker.toLocaleString()}</td>
+                <td>${s.badges.late.toLocaleString()}</td>
+                <td>${s.geometryCoveragePct}%</td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>Top work types</h3>
+        ${summary.bySystem
+          .map(
+            (s) => `
+          <h4 class="analytics-subheading">${systemLabel(s.system)}</h4>
+          <table>
+            <thead><tr><th>Type</th><th>Count</th></tr></thead>
+            <tbody>
+              ${(s.workTypes.length
+                ? s.workTypes
+                : [{ label: '—', count: 0 }]
+              )
+                .map((w) => `<tr><td>${escapeHtml(w.label)}</td><td>${w.count.toLocaleString()}</td></tr>`)
+                .join('')}
+            </tbody>
+          </table>`
+          )
+          .join('')}
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Ingest trend (30 days)</h3>
+      <table>
+        <thead><tr><th>Date</th><th>Dig Alert</th><th>USAN CA</th><th>USAN NV</th></tr></thead>
+        <tbody>
+          ${(trends.trend.length
+            ? trends.trend.slice(-14)
+            : [{ date: '—' }]
+          )
+            .map(
+              (row) => `
+            <tr>
+              <td>${escapeHtml(row.date)}</td>
+              <td>${row.digalert ?? 0}</td>
+              <td>${row['usan-ca'] ?? 0}</td>
+              <td>${row['usan-nv'] ?? 0}</td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>
+    ${
+      hotspots.length
+        ? `<div class="panel">
+      <h3>Overlap hotspots</h3>
+      <p class="muted">Tickets with the most overlapping dig areas. Click a row or map marker to open detail.</p>
+      <div id="analytics-map" class="analytics-map"></div>
+      <table class="analytics-hotspots-table">
+        <thead><tr><th>System</th><th>Ticket</th><th>Overlaps</th><th>Concurrent</th></tr></thead>
+        <tbody>
+          ${hotspots
+            .map(
+              (h) => `
+            <tr class="clickable analytics-hotspot-row" data-system="${h.system}" data-ticket="${escapeHtml(h.ticketNumber)}" data-revision="${escapeHtml(h.revision ?? '00A')}">
+              <td>${systemLabel(h.system)}</td>
+              <td class="mono">${escapeHtml(h.ticketNumber)}${h.revision ? ` / ${escapeHtml(h.revision)}` : ''}</td>
+              <td>${h.overlapCount}</td>
+              <td>${h.concurrentCount}</td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>`
+        : ''
+    }
+    ${
+      state.isAdmin
+        ? `<div class="panel">
+      <h3>Admin — overlap backfill</h3>
+      <p class="muted">Rebuild overlap rows for stored tickets (batch of 500). New ingests compute overlaps automatically.</p>
+      <div class="btn-row">
+        <button class="btn btn-secondary" id="rebuild-overlaps-da" type="button">Rebuild Dig Alert</button>
+        <button class="btn btn-secondary" id="rebuild-overlaps-ca" type="button">Rebuild USAN CA</button>
+        <button class="btn btn-secondary" id="rebuild-overlaps-nv" type="button">Rebuild USAN NV</button>
+      </div>
+      <p id="rebuild-overlaps-msg" class="muted"></p>
+    </div>`
+        : ''
+    }`;
+
+  app.querySelectorAll('.analytics-hotspot-row').forEach((tr) => {
+    tr.addEventListener('click', () =>
+      openDetail(tr.dataset.system, tr.dataset.ticket, tr.dataset.revision)
+    );
+  });
+
+  if (hotspots.length) {
+    setTimeout(() => initAnalyticsMap(hotspots), 0);
+  }
+
+  if (state.isAdmin) {
+    async function runRebuild(system, btn) {
+      const msg = document.getElementById('rebuild-overlaps-msg');
+      btn.disabled = true;
+      msg.textContent = `Rebuilding ${systemLabel(system)}…`;
+      try {
+        let offset = 0;
+        let totalProcessed = 0;
+        let totalOverlaps = 0;
+        for (;;) {
+          const result = await api.rebuildOverlaps({ system, limit: 500, offset });
+          totalProcessed += result.processed;
+          totalOverlaps += result.overlapsFound;
+          offset = result.nextOffset;
+          msg.textContent = `${systemLabel(system)}: processed ${totalProcessed}, overlaps ${totalOverlaps}…`;
+          if (result.processed < 500) break;
+        }
+        msg.textContent = `Done — ${systemLabel(system)}: ${totalProcessed} tickets, ${totalOverlaps} overlap rows written.`;
+      } catch (e) {
+        msg.textContent = e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    document.getElementById('rebuild-overlaps-da')?.addEventListener('click', (e) => runRebuild('digalert', e.target));
+    document.getElementById('rebuild-overlaps-ca')?.addEventListener('click', (e) => runRebuild('usan-ca', e.target));
+    document.getElementById('rebuild-overlaps-nv')?.addEventListener('click', (e) => runRebuild('usan-nv', e.target));
+  }
+}
+
+function initAnalyticsMap(hotspots) {
+  if (state.analyticsMap) {
+    state.analyticsMap.remove();
+    state.analyticsMap = null;
+  }
+  const el = document.getElementById('analytics-map');
+  if (!el) return;
+  state.analyticsMap = L.map('analytics-map').setView([36.16, -115.15], 9);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap',
+  }).addTo(state.analyticsMap);
+
+  const bounds = [];
+  for (const h of hotspots) {
+    if (h.centroidLat == null || h.centroidLon == null) continue;
+    const marker = L.circleMarker([h.centroidLat, h.centroidLon], {
+      radius: Math.min(8 + h.overlapCount, 20),
+      color: '#f97316',
+      fillColor: '#f97316',
+      fillOpacity: 0.7,
+    }).addTo(state.analyticsMap);
+    marker.bindPopup(`${h.ticketNumber}: ${h.overlapCount} overlaps`);
+    marker.on('click', () => openDetail(h.system, h.ticketNumber, h.revision ?? '00A'));
+    bounds.push([h.centroidLat, h.centroidLon]);
+  }
+  if (bounds.length) state.analyticsMap.fitBounds(bounds, { padding: [24, 24] });
+}
+
 async function openDetail(system, ticketNumber, revision) {
   state.detailSystem = system;
   detailTab.classList.remove('hidden');
@@ -921,6 +1124,8 @@ function renderDetail() {
   const system = state.detailSystem;
   const stations = d.stations ?? d.responsesCurrent ?? [];
   const history = d.ticketHistory ?? d.responsesAll ?? [];
+  const overlaps = d.overlaps ?? [];
+  const overlapCount = d.overlapCount ?? overlaps.length;
 
   app.innerHTML = `
     <div class="panel">
@@ -932,6 +1137,27 @@ function renderDetail() {
       <div class="panel">
         <h3>Ticket info</h3>
         <div class="ticket-info">${ticketInfoHtml(system, t)}</div>
+        <h3 class="detail-subheading">Overlapping tickets (${overlapCount})</h3>
+        ${
+          overlaps.length
+            ? `<table>
+          <thead><tr><th>System</th><th>Ticket</th><th>Kind</th><th>Concurrent</th></tr></thead>
+          <tbody>
+            ${overlaps
+              .map(
+                (o) => `
+              <tr class="clickable overlap-row" data-system="${o.system}" data-ticket="${escapeHtml(o.ticketNumber)}" data-revision="${escapeHtml(o.revision ?? '00A')}">
+                <td>${systemLabel(o.system)}</td>
+                <td class="mono">${escapeHtml(o.ticketNumber)}${o.revision ? ` / ${escapeHtml(o.revision)}` : ''}</td>
+                <td>${o.overlapKind === 'bbox' ? '<span class="muted" title="Bbox-only — polygon missing">Bbox</span>' : 'Polygon'}</td>
+                <td>${o.concurrent ? '<span class="badge badge-pending">Yes</span>' : '<span class="muted">No</span>'}</td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>`
+            : '<p class="muted">No overlapping tickets found.</p>'
+        }
         <h3 class="detail-subheading">Utility responses (current)</h3>
         <table>
           <thead><tr><th>Code</th><th>Name</th><th>Resp</th><th>Description</th></tr></thead>
@@ -960,20 +1186,48 @@ function renderDetail() {
     </div>
   `;
 
-  setTimeout(() => {
+  app.querySelectorAll('.overlap-row').forEach((tr) => {
+    tr.addEventListener('click', () =>
+      openDetail(tr.dataset.system, tr.dataset.ticket, tr.dataset.revision)
+    );
+  });
+
+  setTimeout(async () => {
     if (state.detailMap) state.detailMap.remove();
     state.detailMap = L.map('detail-map').setView([36.16, -115.15], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap',
     }).addTo(state.detailMap);
 
+    const layers = [];
     const latlngs = parseWktToLatLngs(t.polygon_wkt);
     if (latlngs.length) {
-      const poly = L.polygon(latlngs).addTo(state.detailMap);
-      state.detailMap.fitBounds(poly.getBounds());
+      const poly = L.polygon(latlngs, { color: '#3b82f6', fillOpacity: 0.25 }).addTo(state.detailMap);
+      layers.push(poly);
     } else if (t.centroid_y && t.centroid_x) {
       state.detailMap.setView([t.centroid_y, t.centroid_x], 15);
-      L.marker([t.centroid_y, t.centroid_x]).addTo(state.detailMap);
+      layers.push(L.marker([t.centroid_y, t.centroid_x]).addTo(state.detailMap));
+    }
+
+    for (const o of overlaps.slice(0, 20)) {
+      try {
+        const other = await api.getTicket(o.system, o.ticketNumber, o.revision ?? undefined);
+        const otherLatLngs = parseWktToLatLngs(other.ticket?.polygon_wkt);
+        if (otherLatLngs.length) {
+          layers.push(
+            L.polygon(otherLatLngs, { color: '#f97316', fillOpacity: 0.15, dashArray: '4' }).addTo(
+              state.detailMap
+            )
+          );
+        }
+      } catch {
+        /* skip missing overlap ticket */
+      }
+    }
+
+    if (layers.length) {
+      const group = L.featureGroup(layers);
+      state.detailMap.fitBounds(group.getBounds().pad(0.1));
     }
   }, 0);
 }
@@ -997,6 +1251,13 @@ async function renderAdmin() {
       <p class="muted">Permanently delete all ticket data (Dig Alert, USAN CA, USAN NV). Jobs, settings, and admin users are not affected.</p>
       <button class="btn-danger" id="nuke-tickets-btn" type="button">Nuke tickets in DB</button>
       <p id="nuke-message" class="muted"></p>
+    </div>
+    <div class="panel">
+      <h2>Overlap settings</h2>
+      <p class="muted">Cross-system overlap compares Dig Alert tickets against USAN when enabled (slower ingest).</p>
+      <label class="chip-check"><input type="checkbox" id="overlap-cross-system" /><span>Enable cross-system overlaps</span></label>
+      <label class="chip-check"><input type="checkbox" id="overlap-prune-enabled" /><span>Prune stale overlap rows (90+ days expired)</span></label>
+      <p id="overlap-settings-msg" class="muted"></p>
     </div>
   `;
 
@@ -1089,10 +1350,35 @@ async function renderAdmin() {
   });
 
   await refreshAdminList();
+
+  try {
+    const overlapSettings = await api.getOverlapSettings();
+    document.getElementById('overlap-cross-system').checked = !!overlapSettings.crossSystem;
+    document.getElementById('overlap-prune-enabled').checked = !!overlapSettings.pruneEnabled;
+  } catch {
+    /* ignore */
+  }
+
+  async function saveOverlapSettings() {
+    const msg = document.getElementById('overlap-settings-msg');
+    try {
+      await api.putOverlapSettings({
+        crossSystem: document.getElementById('overlap-cross-system').checked,
+        pruneEnabled: document.getElementById('overlap-prune-enabled').checked,
+      });
+      msg.textContent = 'Overlap settings saved.';
+    } catch (e) {
+      msg.textContent = e.message;
+    }
+  }
+
+  document.getElementById('overlap-cross-system')?.addEventListener('change', saveOverlapSettings);
+  document.getElementById('overlap-prune-enabled')?.addEventListener('change', saveOverlapSettings);
 }
 
 function render() {
   if (state.view === 'browse') renderBrowse();
+  else if (state.view === 'analytics') renderAnalytics();
   else if (state.view === 'fetch') renderFetch();
   else if (state.view === 'jobs') renderJobs();
   else if (state.view === 'admin') renderAdmin();

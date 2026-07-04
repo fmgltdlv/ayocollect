@@ -63,6 +63,29 @@ export const api = {
   removeAdmin: (email) =>
     request(`/admin/users/${encodeURIComponent(email)}`, { method: 'DELETE' }),
   nukeTickets: () => request('/admin/nuke-tickets', { method: 'POST' }),
+  analyticsSummary: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/analytics/summary${q ? `?${q}` : ''}`);
+  },
+  analyticsTrends: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/analytics/trends${q ? `?${q}` : ''}`);
+  },
+  analyticsOverlaps: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/analytics/overlaps${q ? `?${q}` : ''}`);
+  },
+  getTicketOverlaps: (system, ticketNumber, params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/tickets/${system}/${encodeURIComponent(ticketNumber)}/overlaps${q ? `?${q}` : ''}`);
+  },
+  rebuildOverlaps: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/admin/overlaps/rebuild${q ? `?${q}` : ''}`, { method: 'POST' });
+  },
+  getOverlapSettings: () => request('/admin/settings/overlaps'),
+  putOverlapSettings: (body) =>
+    request('/admin/settings/overlaps', { method: 'PUT', body: JSON.stringify(body) }),
 };
 
 export function badgesHtml(badges) {

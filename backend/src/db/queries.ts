@@ -1,7 +1,8 @@
+import { buildBadgeCondition, type BadgeFilter } from './badge-sql';
 import { computeAnalytics, deriveDigAlertCurrentResponses, listBadges } from '../lib/analytics';
-import { BLOCKER_CODES, SENTINEL_DATE, PENDING_CODE, type AnalyticsFlags, type TicketSystem } from '../types';
-
-export type BadgeFilter = 'pending' | 'blocker' | 'late';
+import { countOverlapsForTicket, listOverlapsForTicket } from '../lib/overlaps';
+import { enrichUsanHistoryRow } from '../lib/usan-ticket';
+import { type TicketSystem } from '../types';
 
 type ListParams = {
   ticketNumber?: string;
@@ -16,7 +17,7 @@ type ListParams = {
   badges?: BadgeFilter[];
 };
 
-const BROWSE_PAGE_SIZE = 30;
+export type { BadgeFilter } from './badge-sql';
 
 function tableForSystem(system: TicketSystem): string {
   if (system === 'digalert') return 'dig_alert_tickets';
@@ -24,49 +25,7 @@ function tableForSystem(system: TicketSystem): string {
   return 'usan_nv_tickets';
 }
 
-function digAlertCurrentResponseExists(codeCondition: string): string {
-  return `EXISTS (
-    SELECT 1 FROM dig_alert_responses r
-    WHERE r.ticket_number = dig_alert_tickets.ticket_number
-      AND r.revision = dig_alert_tickets.revision
-      AND r.responded_at >= '${SENTINEL_DATE}'
-      AND (${codeCondition})
-      AND NOT EXISTS (
-        SELECT 1 FROM dig_alert_responses r2
-        WHERE r2.ticket_number = r.ticket_number
-          AND r2.revision = r.revision
-          AND r2.utility_code = r.utility_code
-          AND r2.responded_at >= '${SENTINEL_DATE}'
-          AND r2.responded_at > r.responded_at
-      )
-  )`;
-}
-
-function usanStationExists(system: 'usan-ca' | 'usan-nv', codeCondition: string): string {
-  const prefix = system === 'usan-ca' ? 'usan_ca' : 'usan_nv';
-  return `EXISTS (
-    SELECT 1 FROM ${prefix}_stations s
-    WHERE s.ticket_number = ${prefix}_tickets.ticket_number
-      AND (${codeCondition})
-  )`;
-}
-
-function buildBadgeCondition(system: TicketSystem, badge: BadgeFilter): string {
-  if (badge === 'late') {
-    return 'had_late_response = 1';
-  }
-  if (badge === 'pending') {
-    if (system === 'digalert') {
-      return digAlertCurrentResponseExists(`r.response_code = '${PENDING_CODE}'`);
-    }
-    return usanStationExists(system, `s.response_code = '${PENDING_CODE}'`);
-  }
-  const blockerList = [...BLOCKER_CODES].map((c) => `'${c}'`).join(', ');
-  if (system === 'digalert') {
-    return digAlertCurrentResponseExists(`r.response_code IN (${blockerList})`);
-  }
-  return usanStationExists(system, `s.response_code IN (${blockerList})`);
-}
+const BROWSE_PAGE_SIZE = 30;
 
 function buildBadgeConditions(system: TicketSystem, badges?: BadgeFilter[]) {
   if (!badges?.length) return [];
@@ -199,8 +158,8 @@ export async function getDigAlertDetail(db: D1Database, ticketNumber: string, re
   if (!ticket) return null;
 
   const { results: responsesAll } = await db
-    .prepare('SELECT * FROM dig_alert_responses WHERE ticket_number = ? AND revision = ?')
-    .bind(ticketNumber, revision)
+    .prepare('SELECT * FROM dig_alert_responses WHERE ticket_id = ?')
+    .bind(ticket.id)
     .all<Record<string, unknown>>();
 
   const { results: revisions } = await db
@@ -218,6 +177,16 @@ export async function getDigAlertDetail(db: D1Database, ticketNumber: string, re
     (responsesAll ?? []).map((r) => r.response_code as string)
   );
 
+  const ref = { system: 'digalert' as const, ticketNumber, revision };
+  let overlapCount = 0;
+  let overlaps: Awaited<ReturnType<typeof listOverlapsForTicket>> = [];
+  try {
+    overlapCount = await countOverlapsForTicket(db, ref);
+    overlaps = await listOverlapsForTicket(db, ref);
+  } catch {
+    /* overlaps table may not exist yet */
+  }
+
   return {
     ticket,
     responsesCurrent,
@@ -225,6 +194,8 @@ export async function getDigAlertDetail(db: D1Database, ticketNumber: string, re
     revisions: revisions ?? [],
     analytics,
     badges: listBadges(analytics),
+    overlapCount,
+    overlaps,
   };
 }
 
@@ -239,14 +210,16 @@ export async function getUsanDetail(db: D1Database, system: 'usan-ca' | 'usan-nv
   if (!ticket) return null;
 
   const { results: stations } = await db
-    .prepare(`SELECT * FROM ${prefix}_stations WHERE ticket_number = ?`)
-    .bind(ticketNumber)
+    .prepare(`SELECT * FROM ${prefix}_stations WHERE ticket_id = ?`)
+    .bind(ticket.id)
     .all<Record<string, unknown>>();
 
-  const { results: ticketHistory } = await db
-    .prepare(`SELECT * FROM ${prefix}_ticket_history WHERE ticket_number = ?`)
-    .bind(ticketNumber)
+  const { results: ticketHistoryRaw } = await db
+    .prepare(`SELECT * FROM ${prefix}_ticket_history WHERE ticket_id = ?`)
+    .bind(ticket.id)
     .all<Record<string, unknown>>();
+
+  const ticketHistory = (ticketHistoryRaw ?? []).map((row) => enrichUsanHistoryRow(ticketNumber, row));
 
   const current = (stations ?? []).map((s) => ({
     code: String(s.code),
@@ -264,12 +237,24 @@ export async function getUsanDetail(db: D1Database, system: 'usan-ca' | 'usan-nv
 
   const analytics = computeAnalytics(current, !!ticket.had_late_response, allCodes);
 
+  const ref = { system, ticketNumber, revision: null };
+  let overlapCount = 0;
+  let overlaps: Awaited<ReturnType<typeof listOverlapsForTicket>> = [];
+  try {
+    overlapCount = await countOverlapsForTicket(db, ref);
+    overlaps = await listOverlapsForTicket(db, ref);
+  } catch {
+    /* overlaps table may not exist yet */
+  }
+
   return {
     ticket,
     stations: stations ?? [],
     ticketHistory: ticketHistory ?? [],
     analytics,
     badges: listBadges(analytics),
+    overlapCount,
+    overlaps,
   };
 }
 

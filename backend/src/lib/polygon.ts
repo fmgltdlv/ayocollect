@@ -1,4 +1,4 @@
-import type { Bbox } from './types';
+import type { Bbox } from '../types';
 
 export function parseQmFormat(qm: string): [number, number][] | null {
   if (!qm?.trim()) return null;
@@ -81,4 +81,20 @@ export function scrapeUsanPolygonWkt(html: string): string | null {
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+export function wktToGeoJsonPolygon(wkt: string | null | undefined): GeoJSON.Polygon | null {
+  const coords = parseWktPolygon(wkt ?? '');
+  if (!coords?.length) return null;
+  return {
+    type: 'Polygon',
+    coordinates: [coords.map(([lon, lat]) => [lon, lat])],
+  };
+}
+
+export function bboxesOverlap(
+  a: { minLon: number; minLat: number; maxLon: number; maxLat: number },
+  b: { minLon: number; minLat: number; maxLon: number; maxLat: number }
+): boolean {
+  return a.maxLon >= b.minLon && a.minLon <= b.maxLon && a.maxLat >= b.minLat && a.minLat <= b.maxLat;
 }

@@ -577,3 +577,58 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
 .admin-danger-panel h2 {
   color: var(--blocker);
 }
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.kpi-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.kpi-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.kpi-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.kpi-pending { color: var(--pending); }
+.kpi-blocker { color: var(--blocker); }
+.kpi-late { color: var(--late); }
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.analytics-subheading {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.analytics-map {
+  height: 280px;
+  border-radius: 8px;
+  margin: 0.75rem 0 1rem;
+  border: 1px solid var(--border);
+}
+
+.analytics-hotspots-table {
+  margin-top: 0.5rem;
+}

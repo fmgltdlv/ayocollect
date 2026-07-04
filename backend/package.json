@@ -9,6 +9,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply ayocollect-db --remote"
   },
   "dependencies": {
+    "@turf/boolean-intersects": "^7.3.5",
+    "@turf/helpers": "^7.3.5",
     "hono": "^4.6.0",
     "jose": "^6.2.3"
   },

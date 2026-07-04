@@ -16,6 +16,8 @@ import {
   listTickets,
   listTicketsMulti,
 } from './db/queries';
+import { getAnalyticsSummary, getAnalyticsTrends, getOverlapHotspots } from './db/analytics-queries';
+import { rebuildOverlapsBatch, listOverlapsForTicket, runOverlapMaintenance } from './lib/overlaps';
 import {
   abortJob,
   cancelJob,
@@ -43,7 +45,7 @@ import {
 import { nukeAllTickets } from './lib/nuke-tickets';
 import { triggerDedicatedScraper } from './lib/scraper-proxy';
 import { createContainerJob, failContainerJob, finalizeStaleContainerJobs } from './lib/container-jobs';
-import { getAutoFetchSettings, isFetchStopped, setSetting } from './lib/settings';
+import { getAutoFetchSettings, getSetting, isFetchStopped, setSetting } from './lib/settings';
 import { ingestRoutes } from './routes/ingest';
 
 type HonoEnv = { Bindings: Env; Variables: { userEmail: string; isAdmin: boolean } };
@@ -139,6 +141,37 @@ app.delete('/api/admin/users/:email', adminOnly, async (c) => {
 app.post('/api/admin/nuke-tickets', adminOnly, async (c) => {
   const result = await nukeAllTickets(c.env.DB);
   return c.json({ nuked: true, ...result });
+});
+
+app.post('/api/admin/overlaps/rebuild', adminOnly, async (c) => {
+  const q = c.req.query.bind(c.req);
+  const system = (q('system') ?? 'digalert') as TicketSystem;
+  const valid = new Set<TicketSystem>(['digalert', 'usan-ca', 'usan-nv']);
+  if (!valid.has(system)) return c.json({ error: 'Invalid system' }, 400);
+  const limit = Math.min(Number(q('limit') ?? 500), 500);
+  const offset = Number(q('offset') ?? 0);
+  const result = await rebuildOverlapsBatch(c.env.DB, system, limit, offset);
+  return c.json({ system, ...result });
+});
+
+app.get('/api/admin/settings/overlaps', adminOnly, async (c) => {
+  const crossSystem = (await getSetting(c.env.DB, 'overlap_cross_system_enabled')) === '1';
+  const pruneEnabled = (await getSetting(c.env.DB, 'overlap_prune_enabled')) !== '0';
+  const rebuildCursor = (await getSetting(c.env.DB, 'overlap_rebuild_cursor')) ?? '';
+  return c.json({ crossSystem, pruneEnabled, rebuildCursor });
+});
+
+app.put('/api/admin/settings/overlaps', adminOnly, async (c) => {
+  const body = await c.req.json<{ crossSystem?: boolean; pruneEnabled?: boolean }>();
+  if (body.crossSystem !== undefined) {
+    await setSetting(c.env.DB, 'overlap_cross_system_enabled', body.crossSystem ? '1' : '0');
+  }
+  if (body.pruneEnabled !== undefined) {
+    await setSetting(c.env.DB, 'overlap_prune_enabled', body.pruneEnabled ? '1' : '0');
+  }
+  const crossSystem = (await getSetting(c.env.DB, 'overlap_cross_system_enabled')) === '1';
+  const pruneEnabled = (await getSetting(c.env.DB, 'overlap_prune_enabled')) !== '0';
+  return c.json({ crossSystem, pruneEnabled });
 });
 
 app.get('/api/settings/auto-fetch', adminOnly, async (c) => {
@@ -307,6 +340,36 @@ app.get('/api/tickets', async (c) => {
   return c.json({ tickets, total, limit, offset });
 });
 
+app.get('/api/analytics/summary', async (c) => {
+  const q = c.req.query.bind(c.req);
+  const systems = parseSystems(q);
+  return c.json(
+    await getAnalyticsSummary(c.env.DB, {
+      startDate: q('startDate'),
+      endDate: q('endDate'),
+      systems: systems.length ? systems : undefined,
+    })
+  );
+});
+
+app.get('/api/analytics/trends', async (c) => {
+  const q = c.req.query.bind(c.req);
+  const days = Number(q('days') ?? 30);
+  const systems = parseSystems(q);
+  return c.json(await getAnalyticsTrends(c.env.DB, days, systems.length ? systems : undefined));
+});
+
+app.get('/api/analytics/overlaps', async (c) => {
+  const q = c.req.query.bind(c.req);
+  const concurrent = q('concurrent') === '1';
+  const limit = Number(q('limit') ?? 20);
+  try {
+    return c.json(await getOverlapHotspots(c.env.DB, { concurrent, limit }));
+  } catch {
+    return c.json({ hotspots: [] });
+  }
+});
+
 app.get('/api/digalert/tickets', async (c) => c.json(await ticketsListHandler(c, 'digalert')));
 app.get('/api/usan-ca/tickets', async (c) => c.json(await ticketsListHandler(c, 'usan-ca')));
 app.get('/api/usan-nv/tickets', async (c) => c.json(await ticketsListHandler(c, 'usan-nv')));
@@ -328,6 +391,25 @@ app.get('/api/usan-nv/tickets/:ticketNumber', async (c) => {
   const detail = await getUsanDetail(c.env.DB, 'usan-nv', c.req.param('ticketNumber'));
   if (!detail) return c.json({ error: 'Not found' }, 404);
   return c.json(detail);
+});
+
+app.get('/api/tickets/:system/:ticketNumber/overlaps', async (c) => {
+  const system = c.req.param('system') as TicketSystem;
+  const valid = new Set<TicketSystem>(['digalert', 'usan-ca', 'usan-nv']);
+  if (!valid.has(system)) return c.json({ error: 'Invalid system' }, 400);
+  const ticketNumber = c.req.param('ticketNumber');
+  const revision = c.req.query('revision') ?? (system === 'digalert' ? '00A' : undefined);
+  const concurrentOnly = c.req.query('concurrent') === '1';
+  try {
+    const overlaps = await listOverlapsForTicket(
+      c.env.DB,
+      { system, ticketNumber, revision: revision ?? null },
+      concurrentOnly
+    );
+    return c.json({ overlaps, total: overlaps.length });
+  } catch {
+    return c.json({ overlaps: [], total: 0 });
+  }
 });
 
 app.post('/api/digalert/fetch', adminOnly, async (c) => {
@@ -381,6 +463,7 @@ export default {
   scheduled: async (event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
     if (event.cron === '0 * * * *') {
       ctx.waitUntil(runCron(env.DB, env, ctx));
+      ctx.waitUntil(runOverlapMaintenance(env.DB));
     }
     if (event.cron === '*/5 * * * *') {
       ctx.waitUntil(finalizeStaleContainerJobs(env.DB));

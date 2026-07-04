@@ -1,4 +1,5 @@
 const TICKET_TABLES = [
+  'ticket_overlaps',
   'dig_alert_responses',
   'dig_alert_revisions',
   'dig_alert_tickets',
