@@ -89,6 +89,7 @@ app.post('/api/jobs/stop-all', async (c) => {
 });
 
 app.get('/api/jobs', async (c) => {
+  await finalizeStaleContainerJobs(c.env.DB);
   const jobs = await listJobs(c.env.DB);
   const stopped = await isFetchStopped(c.env.DB);
   kickStaleRunningJobs(c.env.DB, c.env, workerOrigin(c));
@@ -96,6 +97,7 @@ app.get('/api/jobs', async (c) => {
 });
 
 app.get('/api/jobs/:id', async (c) => {
+  await finalizeStaleContainerJobs(c.env.DB);
   const job = await getJob(c.env.DB, Number(c.req.param('id')));
   if (!job) return c.json({ error: 'Not found' }, 404);
   return c.json({

@@ -74,7 +74,7 @@ def complete_container_job(
     worker_url: str,
     ingest_secret: str,
     job_id: int,
-    systems: dict[str, dict[str, int]],
+    systems: dict[str, dict[str, int]] | None = None,
     ok: bool = True,
     last_error: str | None = None,
 ) -> dict[str, Any]:
@@ -82,7 +82,7 @@ def complete_container_job(
     body: dict[str, Any] = {
         "jobId": job_id,
         "ok": ok,
-        "systems": systems,
+        "systems": systems or {},
     }
     if last_error:
         body["lastError"] = last_error
@@ -97,3 +97,21 @@ def complete_container_job(
     )
     resp.raise_for_status()
     return resp.json()
+
+
+def report_container_exit(
+    worker_url: str,
+    ingest_secret: str,
+    job_id: int,
+    exit_code: int,
+) -> None:
+    if exit_code == 0:
+        complete_container_job(worker_url, ingest_secret, job_id, ok=True)
+    else:
+        complete_container_job(
+            worker_url,
+            ingest_secret,
+            job_id,
+            ok=False,
+            last_error=f"Scraper container exited with code {exit_code}",
+        )

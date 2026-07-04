@@ -10,7 +10,15 @@ export type ContainerSystemState = {
 
 export type ContainerJobSystem = 'digalert' | 'usan-ca' | 'usan-nv';
 
+const CONTAINER_IDLE_MS = 10 * 60 * 1000;
 const CONTAINER_STALE_MS = 2 * 60 * 60 * 1000;
+
+function jobHasIngestBatches(job: FetchJobRow): boolean {
+  for (const key of ['digalert_cursor', 'usan_ca_cursor', 'usan_nv_cursor'] as const) {
+    if (parseContainerState(job[key] as string | null).batches > 0) return true;
+  }
+  return false;
+}
 
 export function isContainerJob(job: FetchJobRow): boolean {
   return job.triggered_by === 'container';
@@ -211,20 +219,36 @@ function parseDbDateTime(iso: string): number {
 export async function finalizeStaleContainerJobs(db: D1Database): Promise<number> {
   const { results } = await db
     .prepare(
-      "SELECT id, updated_at FROM fetch_jobs WHERE status = 'running' AND triggered_by = 'container'"
+      "SELECT * FROM fetch_jobs WHERE status = 'running' AND triggered_by = 'container'"
     )
-    .all<{ id: number; updated_at: string }>();
+    .all<FetchJobRow>();
 
   const now = Date.now();
   let finalized = 0;
-  for (const row of results ?? []) {
-    if (now - parseDbDateTime(row.updated_at) <= CONTAINER_STALE_MS) continue;
-    await failContainerJob(
-      db,
-      row.id,
-      'Scraper stopped reporting progress (no batch activity for 2+ hours)'
-    );
-    finalized += 1;
+  for (const job of results ?? []) {
+    const updatedAt = parseDbDateTime(job.updated_at);
+    const createdAt = parseDbDateTime(job.created_at);
+    const idleMs = now - updatedAt;
+    const ageMs = now - createdAt;
+
+    if (!jobHasIngestBatches(job) && ageMs > CONTAINER_IDLE_MS) {
+      await failContainerJob(
+        db,
+        job.id,
+        'Scraper container stopped without ingesting data'
+      );
+      finalized += 1;
+      continue;
+    }
+
+    if (idleMs > CONTAINER_STALE_MS) {
+      await failContainerJob(
+        db,
+        job.id,
+        'Scraper stopped reporting progress (no batch activity for 2+ hours)'
+      );
+      finalized += 1;
+    }
   }
   return finalized;
 }
