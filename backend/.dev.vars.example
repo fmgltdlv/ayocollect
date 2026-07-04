@@ -3,3 +3,5 @@
 # Local wrangler dev: npx wrangler secrets-store secret create ce24acd5fbfa4bb09a002d09c3645dc0 --name INGEST_SECRET --scopes workers
 # ENABLE_WORKER_SCRAPING=true
 AUTH_DISABLED=true
+# Comma-separated emails with permanent admin access (bootstrap super admins)
+# ADMIN_EMAILS=you@aspadeco.com

@@ -57,6 +57,11 @@ export const api = {
   getSettings: () => request('/settings/auto-fetch'),
   putSettings: (body) =>
     request('/settings/auto-fetch', { method: 'PUT', body: JSON.stringify(body) }),
+  listAdmins: () => request('/admin/users'),
+  addAdmin: (email) =>
+    request('/admin/users', { method: 'POST', body: JSON.stringify({ email }) }),
+  removeAdmin: (email) =>
+    request(`/admin/users/${encodeURIComponent(email)}`, { method: 'DELETE' }),
 };
 
 export function badgesHtml(badges) {

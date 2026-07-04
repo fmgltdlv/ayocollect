@@ -17,6 +17,7 @@ const BROWSE_POLYGON_MAX_ZOOM = 17;
 
 let state = {
   view: 'browse',
+  isAdmin: false,
   browseSystems: ['digalert', 'usan-ca', 'usan-nv'],
   browsePage: 0,
   browseTotal: 0,
@@ -33,7 +34,18 @@ let state = {
   jobsPollId: null,
 };
 
+const ADMIN_VIEWS = new Set(['fetch', 'jobs', 'admin']);
+
+function updateAdminTabs(isAdmin) {
+  document.querySelectorAll('.admin-tab').forEach((tab) => {
+    tab.classList.toggle('hidden', !isAdmin);
+  });
+}
+
 function setView(view) {
+  if (ADMIN_VIEWS.has(view) && !state.isAdmin) {
+    view = 'browse';
+  }
   if (state.jobsPollId) {
     clearInterval(state.jobsPollId);
     state.jobsPollId = null;
@@ -46,6 +58,7 @@ function setView(view) {
 }
 
 async function refreshStopped() {
+  if (!state.isAdmin) return;
   try {
     const { fetchStopped } = await api.listJobs();
     stoppedBanner.classList.toggle('hidden', !fetchStopped);
@@ -437,14 +450,15 @@ function bindBrowseTicketLayer(layer, ticket, label) {
   layer.on('click', () => openDetail(ticket.system, ticket.ticket_number, ticket.revision ?? '00A'));
 }
 
-function createBrowseTicketPin(ticket, latlng, color, label) {
-  const marker = L.circleMarker(latlng, {
-    radius: 7,
-    color,
-    weight: 2,
-    fillColor: color,
-    fillOpacity: 0.75,
+function createBrowseTicketPin(ticket, latlng, color, label, zoom) {
+  const size = Math.round(Math.min(34, Math.max(16, 46 - zoom * 1.05)));
+  const icon = L.divIcon({
+    className: 'browse-pin-icon',
+    html: `<span class="browse-pin-marker" style="--pin-color:${color};--pin-size:${size}px"><span class="browse-pin-core"></span></span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
   });
+  const marker = L.marker(latlng, { icon });
   bindBrowseTicketLayer(marker, ticket, label);
   return marker;
 }
@@ -468,6 +482,7 @@ function renderBrowseMapTickets(fitBounds = false) {
 
   state.ticketLayerGroup.clearLayers();
   const usePins = browseMapUsesPins();
+  const zoom = state.searchMap.getZoom();
   const boundsLayers = [];
 
   for (const t of state.browseMapTickets) {
@@ -478,7 +493,7 @@ function renderBrowseMapTickets(fitBounds = false) {
     if (usePins || !latlngs.length) {
       const center = ticketMapCenter(t, latlngs);
       if (!center) continue;
-      const marker = createBrowseTicketPin(t, center, color, label);
+      const marker = createBrowseTicketPin(t, center, color, label, zoom);
       state.ticketLayerGroup.addLayer(marker);
       boundsLayers.push(marker);
       continue;
@@ -963,10 +978,100 @@ function renderDetail() {
   }, 0);
 }
 
+async function renderAdmin() {
+  app.innerHTML = `
+    <div class="panel">
+      <h2>Admin users</h2>
+      <p class="muted">Only explicitly granted admins can use Fetch and Jobs. Signing in with @aspadeco.com does not grant admin access.</p>
+      <div id="admin-list">Loading…</div>
+      <form class="admin-add-form" id="admin-add-form">
+        <label>Add admin email
+          <input type="email" id="admin-email" placeholder="name@aspadeco.com" required />
+        </label>
+        <button class="btn" type="submit">Add admin</button>
+      </form>
+      <p id="admin-message" class="muted"></p>
+    </div>
+  `;
+
+  async function refreshAdminList() {
+    const el = document.getElementById('admin-list');
+    try {
+      const { admins } = await api.listAdmins();
+      if (!admins.length) {
+        el.innerHTML = '<p class="muted">No admins configured yet.</p>';
+        return;
+      }
+      el.innerHTML = `
+        <table>
+          <thead><tr><th>Email</th><th>Source</th><th>Added</th><th></th></tr></thead>
+          <tbody>
+            ${admins
+              .map(
+                (a) => `
+              <tr>
+                <td class="mono">${escapeHtml(a.email)}</td>
+                <td>${a.source === 'env' ? 'Super admin' : 'Added'}</td>
+                <td>${a.created_at ? escapeHtml(a.created_at) : '—'}</td>
+                <td>
+                  ${
+                    a.source === 'db'
+                      ? `<button class="btn-danger btn-sm remove-admin-btn" data-email="${escapeHtml(a.email)}" type="button">Remove</button>`
+                      : '<span class="muted">—</span>'
+                  }
+                </td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>`;
+      el.querySelectorAll('.remove-admin-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const email = btn.dataset.email;
+          if (!confirm(`Remove admin access for ${email}?`)) return;
+          const msg = document.getElementById('admin-message');
+          btn.disabled = true;
+          try {
+            await api.removeAdmin(email);
+            msg.textContent = `Removed ${email}.`;
+            await refreshAdminList();
+          } catch (e) {
+            msg.textContent = e.message;
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (e) {
+      el.textContent = e.message;
+    }
+  }
+
+  document.getElementById('admin-add-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('admin-email');
+    const msg = document.getElementById('admin-message');
+    const email = input.value.trim();
+    if (!email) return;
+    msg.textContent = 'Adding…';
+    try {
+      await api.addAdmin(email);
+      input.value = '';
+      msg.textContent = `Added ${email}.`;
+      await refreshAdminList();
+    } catch (err) {
+      msg.textContent = err.message;
+    }
+  });
+
+  await refreshAdminList();
+}
+
 function render() {
   if (state.view === 'browse') renderBrowse();
   else if (state.view === 'fetch') renderFetch();
   else if (state.view === 'jobs') renderJobs();
+  else if (state.view === 'admin') renderAdmin();
   else if (state.view === 'detail' && state.detail) renderDetail();
 }
 
@@ -987,8 +1092,17 @@ function renderSignIn(status) {
 
 function handleAuthChange(status) {
   refreshAuthHeader(authArea);
+  state.isAdmin = !!status.admin;
+  updateAdminTabs(state.isAdmin);
   if (status.authenticated) {
-    refreshStopped();
+    if (ADMIN_VIEWS.has(state.view) && !state.isAdmin) {
+      state.view = 'browse';
+      document.querySelectorAll('.tab').forEach((t) => {
+        t.classList.toggle('active', t.dataset.view === 'browse');
+      });
+    }
+    if (state.isAdmin) refreshStopped();
+    else stoppedBanner.classList.add('hidden');
     render();
     return;
   }
@@ -1001,7 +1115,9 @@ function boot() {
     if (status.authenticated) {
       setupGoogleButton(authArea);
       refreshAuthHeader(authArea);
-      refreshStopped();
+      state.isAdmin = !!status.admin;
+      updateAdminTabs(state.isAdmin);
+      if (state.isAdmin) refreshStopped();
       render();
       return;
     }

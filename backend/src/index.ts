@@ -32,14 +32,23 @@ import {
 import { buildJobProgress } from './lib/job-progress';
 import { getIngestSecret, workerScrapingEnabled } from './lib/ingest-auth';
 import { authDisabled, requireGoogleAuth } from './lib/google-auth';
+import {
+  addAdminUser,
+  isAdminEmail,
+  isEnvAdmin,
+  listAdminUsers,
+  removeAdminUser,
+  requireAdmin,
+} from './lib/admin';
 import { triggerDedicatedScraper } from './lib/scraper-proxy';
 import { createContainerJob, failContainerJob, finalizeStaleContainerJobs } from './lib/container-jobs';
 import { getAutoFetchSettings, isFetchStopped, setSetting } from './lib/settings';
 import { ingestRoutes } from './routes/ingest';
 
-type HonoEnv = { Bindings: Env; Variables: { userEmail: string } };
+type HonoEnv = { Bindings: Env; Variables: { userEmail: string; isAdmin: boolean } };
 
 const app = new Hono<HonoEnv>();
+const adminOnly = requireAdmin();
 
 const ALLOWED_ORIGINS = [
   'https://811view.ayowerks.com',
@@ -85,13 +94,52 @@ app.get('/api/health', async (c) =>
 
 app.use('/api/*', requireGoogleAuth());
 
-app.get('/api/auth/me', (c) => c.json({ email: c.get('userEmail') }));
+app.get('/api/auth/me', async (c) => {
+  const email = c.get('userEmail') ?? null;
+  const admin = email ? await isAdminEmail(c.env.DB, c.env, email) : false;
+  return c.json({ email, admin });
+});
 
-app.get('/api/settings/auto-fetch', async (c) => {
+app.get('/api/admin/users', adminOnly, async (c) => {
+  return c.json({ admins: await listAdminUsers(c.env.DB, c.env) });
+});
+
+app.post('/api/admin/users', adminOnly, async (c) => {
+  const body = await c.req.json<{ email?: string }>();
+  const email = body.email?.trim().toLowerCase();
+  if (!email) return c.json({ error: 'email required' }, 400);
+
+  const domain = c.env.ALLOWED_EMAIL_DOMAIN?.trim().toLowerCase().replace(/^@/, '') ?? '';
+  if (domain && !email.endsWith(`@${domain}`)) {
+    return c.json({ error: `Email must be @${domain}` }, 400);
+  }
+
+  if (await isAdminEmail(c.env.DB, c.env, email)) {
+    return c.json({ error: 'Already an admin' }, 409);
+  }
+
+  const admin = await addAdminUser(c.env.DB, email, c.get('userEmail'));
+  return c.json({ admin }, 201);
+});
+
+app.delete('/api/admin/users/:email', adminOnly, async (c) => {
+  const email = decodeURIComponent(c.req.param('email')).trim().toLowerCase();
+  if (email === c.get('userEmail').toLowerCase()) {
+    return c.json({ error: 'Cannot remove yourself' }, 400);
+  }
+  if (isEnvAdmin(c.env, email)) {
+    return c.json({ error: 'Cannot remove env-configured super admin' }, 400);
+  }
+  const removed = await removeAdminUser(c.env.DB, c.env, email);
+  if (!removed) return c.json({ error: 'Not found or not removable' }, 404);
+  return c.json({ removed: true, email });
+});
+
+app.get('/api/settings/auto-fetch', adminOnly, async (c) => {
   return c.json(await getAutoFetchSettings(c.env.DB));
 });
 
-app.put('/api/settings/auto-fetch', async (c) => {
+app.put('/api/settings/auto-fetch', adminOnly, async (c) => {
   const body = await c.req.json<Record<string, string>>();
   for (const [key, value] of Object.entries(body)) {
     if (key.startsWith('auto_fetch_') || key === 'fetch_stopped') {
@@ -101,12 +149,12 @@ app.put('/api/settings/auto-fetch', async (c) => {
   return c.json(await getAutoFetchSettings(c.env.DB));
 });
 
-app.post('/api/jobs/stop-all', async (c) => {
+app.post('/api/jobs/stop-all', adminOnly, async (c) => {
   const count = await stopAllJobs(c.env.DB);
   return c.json({ stopped: true, cancelledJobCount: count, fetchStopped: true });
 });
 
-app.get('/api/jobs', async (c) => {
+app.get('/api/jobs', adminOnly, async (c) => {
   await finalizeStaleContainerJobs(c.env.DB);
   const jobs = await listJobs(c.env.DB);
   const stopped = await isFetchStopped(c.env.DB);
@@ -114,7 +162,7 @@ app.get('/api/jobs', async (c) => {
   return c.json({ jobs, fetchStopped: stopped });
 });
 
-app.get('/api/jobs/:id', async (c) => {
+app.get('/api/jobs/:id', adminOnly, async (c) => {
   await finalizeStaleContainerJobs(c.env.DB);
   const job = await getJob(c.env.DB, Number(c.req.param('id')));
   if (!job) return c.json({ error: 'Not found' }, 404);
@@ -125,7 +173,7 @@ app.get('/api/jobs/:id', async (c) => {
   });
 });
 
-app.post('/api/jobs', async (c) => {
+app.post('/api/jobs', adminOnly, async (c) => {
   const body = await c.req.json<{
     systems: string[];
     startDate: string;
@@ -162,7 +210,7 @@ app.post('/api/jobs', async (c) => {
   return c.json({ job, started: true, fetchStopped: await isFetchStopped(c.env.DB) });
 });
 
-app.post('/api/jobs/:id/tick', async (c) => {
+app.post('/api/jobs/:id/tick', adminOnly, async (c) => {
   const id = Number(c.req.param('id'));
   c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx, workerOrigin(c)));
   const job = await getJob(c.env.DB, id);
@@ -170,21 +218,21 @@ app.post('/api/jobs/:id/tick', async (c) => {
   return c.json({ job, continued: true });
 });
 
-app.post('/api/jobs/:id/cancel', async (c) => {
+app.post('/api/jobs/:id/cancel', adminOnly, async (c) => {
   const id = Number(c.req.param('id'));
   const job = await cancelJob(c.env.DB, id);
   if (!job) return c.json({ error: 'Not found' }, 404);
   return c.json({ job, cancelled: true });
 });
 
-app.post('/api/jobs/:id/pause', async (c) => {
+app.post('/api/jobs/:id/pause', adminOnly, async (c) => {
   const id = Number(c.req.param('id'));
   await c.env.DB.prepare("UPDATE fetch_jobs SET status = 'paused', updated_at = datetime('now') WHERE id = ?").bind(id).run();
   abortJob(id);
   return c.json({ ok: true });
 });
 
-app.post('/api/jobs/:id/resume', async (c) => {
+app.post('/api/jobs/:id/resume', adminOnly, async (c) => {
   const id = Number(c.req.param('id'));
   await c.env.DB.prepare("UPDATE fetch_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").bind(id).run();
   c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx, workerOrigin(c)));
@@ -276,7 +324,7 @@ app.get('/api/usan-nv/tickets/:ticketNumber', async (c) => {
   return c.json(detail);
 });
 
-app.post('/api/digalert/fetch', async (c) => {
+app.post('/api/digalert/fetch', adminOnly, async (c) => {
   const blocked = scrapingDisabledResponse(c);
   if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string; revision?: string }>();
@@ -287,7 +335,7 @@ app.post('/api/digalert/fetch', async (c) => {
   return c.json({ ticketNumber: id, detail });
 });
 
-app.post('/api/usan-ca/fetch', async (c) => {
+app.post('/api/usan-ca/fetch', adminOnly, async (c) => {
   const blocked = scrapingDisabledResponse(c);
   if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string }>();
@@ -299,7 +347,7 @@ app.post('/api/usan-ca/fetch', async (c) => {
   return c.json({ ticketNumber: id, detail });
 });
 
-app.post('/api/usan-nv/fetch', async (c) => {
+app.post('/api/usan-nv/fetch', adminOnly, async (c) => {
   const blocked = scrapingDisabledResponse(c);
   if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string }>();

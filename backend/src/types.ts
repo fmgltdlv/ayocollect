@@ -21,6 +21,8 @@ export type Env = {
   ALLOWED_EMAIL_DOMAIN?: string;
   /** When true, skip Google auth (local wrangler dev). */
   AUTH_DISABLED?: string;
+  /** Comma-separated emails that always have admin access (bootstrap / super admins). */
+  ADMIN_EMAILS?: string;
 };
 
 export type TicketSystem = 'digalert' | 'usan-ca' | 'usan-nv';

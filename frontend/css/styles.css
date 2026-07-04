@@ -536,3 +536,36 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
   font-size: 0.8rem;
   color: var(--muted);
 }
+
+.browse-pin-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+.browse-pin-marker {
+  width: var(--pin-size);
+  height: var(--pin-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
+}
+
+.browse-pin-core {
+  width: 68%;
+  height: 68%;
+  border-radius: 50%;
+  background: var(--pin-color);
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 1px rgba(15, 20, 25, 0.55);
+}
+
+.admin-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}

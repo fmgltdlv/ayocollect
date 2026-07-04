@@ -3,6 +3,7 @@ import { api, setAuthTokenGetter, setUnauthorizedHandler } from './api.js';
 const STORAGE_KEY = 'ayo_google_credential';
 
 let currentEmail = null;
+let currentIsAdmin = false;
 let onAuthChange = null;
 let googleReady = false;
 let googleLoadStarted = false;
@@ -37,8 +38,19 @@ function decodeEmail(credential) {
   }
 }
 
+export function isAdmin() {
+  return currentIsAdmin;
+}
+
 function notifyAuthChange(authenticated) {
-  if (onAuthChange) onAuthChange({ authenticated, email: currentEmail, skipped: !isAuthRequired() });
+  if (onAuthChange) {
+    onAuthChange({
+      authenticated,
+      email: currentEmail,
+      admin: isAdmin(),
+      skipped: !isAuthRequired(),
+    });
+  }
 }
 
 export function signOut() {
@@ -47,6 +59,7 @@ export function signOut() {
   }
   setToken(null);
   currentEmail = null;
+  currentIsAdmin = false;
   notifyAuthChange(false);
 }
 
@@ -54,7 +67,17 @@ function handleCredential(response) {
   const credential = response.credential;
   setToken(credential);
   currentEmail = decodeEmail(credential);
-  notifyAuthChange(true);
+  api
+    .me()
+    .then((me) => {
+      currentEmail = me.email || currentEmail;
+      currentIsAdmin = !!me.admin;
+      notifyAuthChange(true);
+    })
+    .catch(() => {
+      currentIsAdmin = false;
+      notifyAuthChange(true);
+    });
 }
 
 function initGoogleSignIn(clientId) {
@@ -151,10 +174,12 @@ async function validateStoredToken() {
   try {
     const me = await api.me();
     currentEmail = me.email || decodeEmail(token);
+    currentIsAdmin = !!me.admin;
     return true;
   } catch {
     setToken(null);
     currentEmail = null;
+    currentIsAdmin = false;
     return false;
   }
 }
@@ -166,11 +191,20 @@ export async function initAuth(authChangeCallback) {
     if (!isAuthRequired()) return;
     setToken(null);
     currentEmail = null;
+    currentIsAdmin = false;
     notifyAuthChange(false);
   });
 
   if (!isAuthRequired()) {
-    authChangeCallback({ authenticated: true, skipped: true });
+    try {
+      const me = await api.me();
+      currentEmail = me.email || null;
+      currentIsAdmin = !!me.admin;
+    } catch {
+      currentEmail = null;
+      currentIsAdmin = false;
+    }
+    authChangeCallback({ authenticated: true, email: currentEmail, admin: currentIsAdmin, skipped: true });
     return;
   }
 
@@ -183,7 +217,7 @@ export async function initAuth(authChangeCallback) {
   ensureGoogleScript(clientId);
 
   if (await validateStoredToken()) {
-    authChangeCallback({ authenticated: true, email: currentEmail });
+    authChangeCallback({ authenticated: true, email: currentEmail, admin: currentIsAdmin });
     return;
   }
 
