@@ -7,6 +7,7 @@ import {
   compareDates,
 } from './ticket-sequence';
 import { BATCH_SIZE } from '../types';
+import { isContainerJob, parseContainerState } from './container-jobs';
 
 export type SystemProgress = {
   enabled: boolean;
@@ -129,30 +130,97 @@ function digAlertProgress(
   };
 }
 
-export function buildJobProgress(job: FetchJobRow): JobProgress {
-  const systems = {
-    digalert: digAlertProgress(
-      !!job.include_digalert,
-      job.digalert_cursor,
-      job.digalert_fetched,
-      job.start_date,
-      job.end_date
-    ),
-    usanCa: usanProgress(
-      !!job.include_usan_ca,
-      job.usan_ca_cursor,
-      job.usan_ca_fetched,
-      job.start_date,
-      job.end_date
-    ),
-    usanNv: usanProgress(
-      !!job.include_usan_nv,
-      job.usan_nv_cursor,
-      job.usan_nv_fetched,
-      job.start_date,
-      job.end_date
-    ),
+function containerSystemProgress(
+  enabled: boolean,
+  raw: string | null,
+  fetched: number,
+  start: string,
+  end: string
+): SystemProgress {
+  if (!enabled) {
+    return {
+      enabled: false,
+      fetched: 0,
+      currentDate: start,
+      consecutiveMisses: 0,
+      nextTicket: null,
+      done: true,
+      dateProgressPct: null,
+      detail: 'Not included in this job',
+    };
+  }
+  const state = parseContainerState(raw);
+  const current = state.scanDate ?? start;
+  const done = state.done;
+  const pct = done ? 100 : dateProgressPct(start, end, current);
+  const activity = state.lastBatchAt
+    ? ` · last batch ${state.lastBatchAt.replace('T', ' ').slice(0, 19)} UTC`
+    : '';
+  return {
+    enabled: true,
+    fetched,
+    currentDate: current,
+    consecutiveMisses: 0,
+    nextTicket: null,
+    done,
+    dateProgressPct: pct,
+    detail: done
+      ? `Finished — ${state.batches} batch(es) ingested, ${fetched} ticket(s)`
+      : state.batches
+        ? `${state.batches} batch(es) ingested, ${fetched} ticket(s)${activity}`
+        : 'Waiting for scraper batches…',
   };
+}
+
+export function buildJobProgress(job: FetchJobRow): JobProgress {
+  const container = isContainerJob(job);
+  const systems = container
+    ? {
+        digalert: containerSystemProgress(
+          !!job.include_digalert,
+          job.digalert_cursor,
+          job.digalert_fetched,
+          job.start_date,
+          job.end_date
+        ),
+        usanCa: containerSystemProgress(
+          !!job.include_usan_ca,
+          job.usan_ca_cursor,
+          job.usan_ca_fetched,
+          job.start_date,
+          job.end_date
+        ),
+        usanNv: containerSystemProgress(
+          !!job.include_usan_nv,
+          job.usan_nv_cursor,
+          job.usan_nv_fetched,
+          job.start_date,
+          job.end_date
+        ),
+      }
+    : {
+        digalert: digAlertProgress(
+          !!job.include_digalert,
+          job.digalert_cursor,
+          job.digalert_fetched,
+          job.start_date,
+          job.end_date
+        ),
+        usanCa: usanProgress(
+          !!job.include_usan_ca,
+          job.usan_ca_cursor,
+          job.usan_ca_fetched,
+          job.start_date,
+          job.end_date
+        ),
+        usanNv: usanProgress(
+          !!job.include_usan_nv,
+          job.usan_nv_cursor,
+          job.usan_nv_fetched,
+          job.start_date,
+          job.end_date
+        ),
+      };
   const active = [systems.digalert, systems.usanCa, systems.usanNv].filter((s) => s.enabled);
   const systemsComplete = active.filter((s) => s.done).length;
 

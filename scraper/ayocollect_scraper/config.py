@@ -28,6 +28,7 @@ class Settings:
     api_host: str
     api_port: int
     api_key: str | None
+    scrape_job_id: int | None = None
 
 
 def load_settings() -> Settings:
@@ -38,6 +39,9 @@ def load_settings() -> Settings:
 
     raw_systems = os.getenv("SYSTEMS", "digalert,usan-ca,usan-nv")
     systems = [s.strip() for s in raw_systems.split(",") if s.strip()]
+
+    job_raw = os.getenv("SCRAPE_JOB_ID", "").strip()
+    scrape_job_id = int(job_raw) if job_raw.isdigit() else None
 
     return Settings(
         worker_url=worker_url,
@@ -50,4 +54,5 @@ def load_settings() -> Settings:
         api_host=os.getenv("SCRAPER_API_HOST", "0.0.0.0"),
         api_port=int(os.getenv("SCRAPER_API_PORT", "8789")),
         api_key=os.getenv("SCRAPER_API_KEY") or None,
+        scrape_job_id=scrape_job_id,
     )

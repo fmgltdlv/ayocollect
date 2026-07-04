@@ -4,6 +4,7 @@ export type ScrapeTriggerBody = {
   startDate: string;
   endDate: string;
   systems: string[];
+  jobId?: number;
 };
 
 export async function triggerDedicatedScraper(
@@ -34,6 +35,7 @@ export async function triggerDedicatedScraper(
     end: body.endDate,
     systems: body.systems,
   };
+  if (body.jobId != null) payload.jobId = body.jobId;
 
   const runUrl = `${base}/run`;
   const resp = await fetch(runUrl, {

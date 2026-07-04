@@ -24,6 +24,7 @@ def post_batch(
     batch_id: str,
     tickets: list[Any],
     scraped_at: str | None = None,
+    job_id: int | None = None,
     retries: int = 3,
 ) -> dict[str, Any]:
     if system not in INGEST_PATHS:
@@ -36,6 +37,8 @@ def post_batch(
         "scrapedAt": scraped_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "tickets": tickets,
     }
+    if job_id is not None:
+        body["jobId"] = job_id
     headers = {
         "Authorization": f"Bearer {ingest_secret}",
         "Content-Type": "application/json",
@@ -61,6 +64,35 @@ def check_ingest_health(worker_url: str, ingest_secret: str) -> dict[str, Any]:
     resp = requests.get(
         url,
         headers={"Authorization": f"Bearer {ingest_secret}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def complete_container_job(
+    worker_url: str,
+    ingest_secret: str,
+    job_id: int,
+    systems: dict[str, dict[str, int]],
+    ok: bool = True,
+    last_error: str | None = None,
+) -> dict[str, Any]:
+    url = f"{worker_url.rstrip('/')}/api/ingest/job-complete"
+    body: dict[str, Any] = {
+        "jobId": job_id,
+        "ok": ok,
+        "systems": systems,
+    }
+    if last_error:
+        body["lastError"] = last_error
+    resp = requests.post(
+        url,
+        json=body,
+        headers={
+            "Authorization": f"Bearer {ingest_secret}",
+            "Content-Type": "application/json",
+        },
         timeout=30,
     )
     resp.raise_for_status()

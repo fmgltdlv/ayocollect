@@ -9,7 +9,7 @@ from typing import Any, Callable
 from .config import Settings
 from .fetchers.digalert import fetch_digalert_raw
 from .fetchers.usan import fetch_usan_polygon_wkt, fetch_usan_posr
-from .ingest_client import post_batch
+from .ingest_client import complete_container_job, post_batch
 from .sequence import add_days, compare_dates, format_digalert_ticket, format_usan_ticket
 
 LogFn = Callable[[str], None]
@@ -67,6 +67,7 @@ class BatchBuffer:
                 self.system,
                 batch_id,
                 self.items,
+                job_id=self.settings.scrape_job_id,
             )
             self.stats.batches_sent += 1
             self.log(
@@ -205,6 +206,32 @@ def run_scan(
             f"Done {sys}: checked={stats.checked} fetched={stats.fetched} "
             f"batches={stats.batches_sent} ingest_errors={stats.ingest_errors}"
         )
+
+    if settings.scrape_job_id is not None:
+        ingest_errors = sum(s.ingest_errors for s in result.systems.values())
+        try:
+            complete_container_job(
+                settings.worker_url,
+                settings.ingest_secret,
+                settings.scrape_job_id,
+                {
+                    sys: {
+                        "fetched": stats.fetched,
+                        "checked": stats.checked,
+                        "ingest_errors": stats.ingest_errors,
+                    }
+                    for sys, stats in result.systems.items()
+                },
+                ok=ingest_errors == 0,
+                last_error=(
+                    f"Scraper finished with {ingest_errors} ingest error(s)"
+                    if ingest_errors
+                    else None
+                ),
+            )
+            emit(f"Job #{settings.scrape_job_id} marked complete")
+        except Exception as e:
+            emit(f"Job #{settings.scrape_job_id} completion report FAILED: {e}")
 
     return result
 

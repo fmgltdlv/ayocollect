@@ -22,6 +22,7 @@ type RunBody = {
   end?: string;
   mode?: string;
   systems?: string[];
+  jobId?: number;
 };
 
 function scrapeEnv(
@@ -42,6 +43,9 @@ function overridesFromBody(body: RunBody): Record<string, string> {
   const overrides: Record<string, string> = {};
   if (body.systems?.length) {
     overrides.SYSTEMS = body.systems.join(",");
+  }
+  if (body.jobId != null) {
+    overrides.SCRAPE_JOB_ID = String(body.jobId);
   }
   return overrides;
 }

@@ -32,6 +32,7 @@ import {
 import { buildJobProgress } from './lib/job-progress';
 import { getIngestSecret, workerScrapingEnabled } from './lib/ingest-auth';
 import { triggerDedicatedScraper } from './lib/scraper-proxy';
+import { createContainerJob, failContainerJob, finalizeStaleContainerJobs } from './lib/container-jobs';
 import { getAutoFetchSettings, isFetchStopped, setSetting } from './lib/settings';
 import { ingestRoutes } from './routes/ingest';
 
@@ -115,18 +116,22 @@ app.post('/api/jobs', async (c) => {
   }
 
   if (!workerScrapingEnabled(c.env)) {
+    const id = await createContainerJob(c.env.DB, body);
     try {
-      const result = await triggerDedicatedScraper(c.env, body);
+      const result = await triggerDedicatedScraper(c.env, { ...body, jobId: id });
+      const job = await getJob(c.env.DB, id);
       return c.json({
         started: true,
         dedicatedScraper: true,
+        job,
         message:
-          'Scraper container started. Tickets will appear in Browse as batches are ingested (Jobs tab tracks legacy Worker jobs only).',
+          'Scraper container started. Track progress on the Jobs tab; tickets appear in Browse as batches are ingested.',
         scraper: result.scraper,
         fetchStopped: await isFetchStopped(c.env.DB),
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      await failContainerJob(c.env.DB, id, msg);
       return c.json({ error: msg }, 502);
     }
   }
@@ -302,6 +307,9 @@ export default {
   scheduled: async (event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
     if (event.cron === '0 * * * *') {
       ctx.waitUntil(runCron(env.DB, env, ctx));
+    }
+    if (event.cron === '*/5 * * * *') {
+      ctx.waitUntil(finalizeStaleContainerJobs(env.DB));
     }
     ctx.waitUntil(resumeStalledJobs(env.DB, env, ctx, env.WORKER_URL));
   },

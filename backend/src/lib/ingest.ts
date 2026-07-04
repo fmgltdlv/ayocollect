@@ -1,11 +1,14 @@
 import type { DigAlertPayload } from '../fetchers';
 import { upsertDigAlert, upsertUsan } from '../db/upsert';
+import { recordContainerBatch, type ContainerJobSystem } from './container-jobs';
 
 export const MAX_INGEST_BATCH_SIZE = 100;
 
 export type IngestBatchMeta = {
   batchId: string;
   scrapedAt?: string;
+  /** Links ingest batches to a container job in fetch_jobs */
+  jobId?: number;
 };
 
 export type IngestBatchResult = IngestBatchMeta & {
@@ -116,4 +119,15 @@ export async function ingestUsanBatch(
     failed: errors.length,
     errors,
   };
+}
+
+export async function trackContainerIngest(
+  db: D1Database,
+  system: ContainerJobSystem,
+  body: IngestBatchMeta,
+  accepted: number,
+  failed: number
+): Promise<void> {
+  if (!body.jobId) return;
+  await recordContainerBatch(db, body.jobId, system, accepted, failed, body.batchId);
 }

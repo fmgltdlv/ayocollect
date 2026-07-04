@@ -332,21 +332,42 @@ function renderFetch() {
       const res = await api.createJob(payload);
       out.textContent = res.dedicatedScraper
         ? (res.message ||
-            'Scraper container started — tickets will appear in Browse as batches are ingested.')
+            `Job #${res.job?.id ?? '?'} started — scraper container running. See Jobs tab for progress.`)
         : 'Job started — fetching continuously in background. Check Jobs tab for progress.';
-      if (!res.dedicatedScraper) {
-        await refreshStopped();
-        setView('jobs');
-      }
+      await refreshStopped();
+      setView('jobs');
     } catch (e) {
       out.textContent = e.message;
     }
   });
 }
 
-const JOBS_POLL_MS = 120_000;
+const JOBS_POLL_MS = 30_000;
+
+function jobListStatusLabel(job) {
+  if (job.triggered_by === 'container') {
+    const fetched =
+      (job.digalert_fetched || 0) + (job.usan_ca_fetched || 0) + (job.usan_nv_fetched || 0);
+    if (job.status === 'running') {
+      return fetched ? `${job.status} (container · ${fetched} tickets)` : `${job.status} (container)`;
+    }
+    return `${job.status} (container)`;
+  }
+  return job.status;
+}
 
 function jobStatusLabel(job, progress) {
+  if (job.triggered_by === 'container') {
+    if (job.status === 'running') {
+      const fetched =
+        (job.digalert_fetched || 0) + (job.usan_ca_fetched || 0) + (job.usan_nv_fetched || 0);
+      if (progress && progress.systemsComplete < progress.systemsActive) {
+        return `running (container · ${fetched} tickets)`;
+      }
+      return fetched ? `running (container · ${fetched} tickets)` : 'running (container)';
+    }
+    return job.status;
+  }
   if (job.status !== 'running' || !progress) return job.status;
   if (progress.systemsComplete >= progress.systemsActive) return 'running';
   return `running (${progress.systemsComplete}/${progress.systemsActive} systems done)`;
@@ -385,7 +406,7 @@ function renderJobsTable(jobs) {
             (j) => `
           <tr>
             <td>${j.id}</td>
-            <td>${j.status}${j.status === 'running' ? ' <span class="muted">(auto-refreshes every 2 min)</span>' : ''}</td>
+            <td>${jobListStatusLabel(j)}${j.status === 'running' ? ' <span class="muted">(auto-refreshes every 30s)</span>' : ''}</td>
             <td>${j.start_date} → ${j.end_date}</td>
             <td class="mono">${[
               j.include_digalert ? 'DA' : '',
@@ -541,14 +562,14 @@ async function showJobProgress(jobId) {
         ? `<p class="muted">${p.systemsComplete} of ${p.systemsActive} systems finished scanning — job is still running.</p>`
         : ''}
       <p><strong>Range:</strong> ${p.dateRange.start} → ${p.dateRange.end}</p>
-      <p><strong>Triggered by:</strong> ${p.triggeredBy} · <strong>Parallel batch:</strong> ${p.batchSize} tickets/system/wave (continuous)</p>
+      <p><strong>Triggered by:</strong> ${p.triggeredBy === 'container' ? 'container scraper' : p.triggeredBy}${p.triggeredBy === 'container' ? '' : ` · <strong>Parallel batch:</strong> ${p.batchSize} tickets/system/wave (continuous)`}</p>
       <p class="muted">Updated: ${p.updatedAt}</p>
       ${p.errorCount ? `<p class="badge badge-blocker">Errors: ${p.errorCount}${p.lastError ? ` — ${p.lastError}` : ''}</p>` : ''}
       ${systemBlock('Dig Alert', p.systems.digalert, p.status)}
       ${systemBlock('USAN CA', p.systems.usanCa, p.status)}
       ${systemBlock('USAN NV', p.systems.usanNv, p.status)}
       <div class="btn-row" style="margin-top:1rem">
-        ${job.status === 'paused' ? `<button class="btn tick-btn-modal" type="button">Continue job</button>` : ''}
+        ${job.status === 'paused' && job.triggered_by !== 'container' ? `<button class="btn tick-btn-modal" type="button">Continue job</button>` : ''}
         ${['running', 'paused', 'pending'].includes(job.status) ? `<button class="btn-danger stop-btn-modal" type="button">Stop job</button>` : ''}
         <button class="btn-secondary close-modal" type="button">Close</button>
       </div>`;
