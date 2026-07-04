@@ -324,7 +324,7 @@ async function ticketsListHandler(c: { env: Env; req: { query: (k: string) => st
   const rows = await listTickets(c.env.DB, system, params);
   const total = await countTickets(c.env.DB, system, params);
   const tickets = await enrichListWithBadges(c.env.DB, system, rows);
-  const limit = params.limit ?? 30;
+  const limit = params.limit ?? 100;
   const offset = params.offset ?? 0;
   return { tickets, total, limit, offset };
 }

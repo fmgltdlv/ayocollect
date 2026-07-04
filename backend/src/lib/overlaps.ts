@@ -2,6 +2,7 @@ import booleanIntersects from '@turf/boolean-intersects';
 import {
   CANDIDATE_CAP,
   canonicalPair,
+  createdOnDifferentDays,
   findOverlapCandidates,
   loadTicketCandidate,
   listTicketsForRebuild,
@@ -111,6 +112,8 @@ export async function recomputeOverlapsForTicket(db: D1Database, ref: TicketRef)
   let count = 0;
 
   for (const candidate of candidates.slice(0, CANDIDATE_CAP)) {
+    if (!createdOnDifferentDays(source, candidate)) continue;
+
     const kind = overlapKind(source, candidate);
     if (!kind) continue;
 
@@ -234,6 +237,8 @@ export async function runOverlapMaintenance(db: D1Database): Promise<{ refreshed
   let refreshed = 0;
   let pruned = 0;
 
+  pruned += await pruneSameDayOverlaps(db);
+
   const { results: rows } = await db
     .prepare('SELECT id, a_system, a_number, a_revision, b_system, b_number, b_revision, concurrent FROM ticket_overlaps WHERE concurrent = 1 LIMIT 500')
     .all<{
@@ -282,6 +287,41 @@ export async function runOverlapMaintenance(db: D1Database): Promise<{ refreshed
   }
 
   return { refreshed, pruned };
+}
+
+async function pruneSameDayOverlaps(db: D1Database): Promise<number> {
+  const { results } = await db
+    .prepare('SELECT id, a_system, a_number, a_revision, b_system, b_number, b_revision FROM ticket_overlaps LIMIT ?')
+    .bind(PRUNE_BATCH)
+    .all<{
+      id: number;
+      a_system: TicketSystem;
+      a_number: string;
+      a_revision: string | null;
+      b_system: TicketSystem;
+      b_number: string;
+      b_revision: string | null;
+    }>();
+
+  let pruned = 0;
+  for (const row of results ?? []) {
+    const a = await loadTicketCandidate(db, {
+      system: row.a_system,
+      ticketNumber: row.a_number,
+      revision: row.a_revision,
+    });
+    const b = await loadTicketCandidate(db, {
+      system: row.b_system,
+      ticketNumber: row.b_number,
+      revision: row.b_revision,
+    });
+    if (!a || !b) continue;
+    if (!createdOnDifferentDays(a, b)) {
+      await db.prepare('DELETE FROM ticket_overlaps WHERE id = ?').bind(row.id).run();
+      pruned++;
+    }
+  }
+  return pruned;
 }
 
 async function pruneStaleOverlaps(db: D1Database, cutoffStr: string): Promise<number> {

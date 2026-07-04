@@ -12,7 +12,7 @@ const stoppedBanner = document.getElementById('stopped-banner');
 const detailTab = document.getElementById('detail-tab');
 const authArea = document.getElementById('auth-area');
 
-const BROWSE_PAGE_SIZE = 30;
+const BROWSE_PAGE_SIZE = 100;
 const BROWSE_POLYGON_MAX_ZOOM = 17;
 
 let state = {
@@ -447,8 +447,12 @@ function bindBrowseTicketLayer(layer, ticket, label) {
   layer.on('click', () => openDetail(ticket.system, ticket.ticket_number, ticket.revision ?? '00A'));
 }
 
+function browsePinSize(zoom) {
+  return Math.round(Math.min(58, Math.max(26, 78 - zoom * 1.35)));
+}
+
 function createBrowseTicketPin(ticket, latlng, color, label, zoom) {
-  const size = Math.round(Math.min(34, Math.max(16, 46 - zoom * 1.05)));
+  const size = browsePinSize(zoom);
   const icon = L.divIcon({
     className: 'browse-pin-icon',
     html: `<span class="browse-pin-marker" style="--pin-color:${color};--pin-size:${size}px"><span class="browse-pin-core"></span></span>`,
@@ -1138,6 +1142,7 @@ function renderDetail() {
         <h3>Ticket info</h3>
         <div class="ticket-info">${ticketInfoHtml(system, t)}</div>
         <h3 class="detail-subheading">Overlapping tickets (${overlapCount})</h3>
+        <p class="muted" style="margin:0 0 0.5rem;font-size:0.85rem">Only tickets filed on different days are counted (same-day tickets are usually from the same caller).</p>
         ${
           overlaps.length
             ? `<table>

@@ -17,6 +17,8 @@ export type TicketCandidate = {
   bboxMaxLat: number;
   windowStart: string | null;
   windowEnd: string | null;
+  /** Calendar day the ticket was filed (DigAlert: completed, USAN: job_start_date). */
+  createdDay: string | null;
   isCancelled?: number | null;
 };
 
@@ -31,14 +33,15 @@ function tableForSystem(system: TicketSystem): string {
 function digAlertSelect(): string {
   return `ticket_number, revision, polygon_wkt,
     bbox_min_lon, bbox_min_lat, bbox_max_lon, bbox_max_lat,
-    completed AS window_start, replace_by_date AS window_end`;
+    completed AS window_start, replace_by_date AS window_end,
+    date(completed) AS created_day`;
 }
 
 function usanSelect(): string {
   return `ticket_number, NULL AS revision, polygon_wkt,
     bbox_min_lon, bbox_min_lat, bbox_max_lon, bbox_max_lat,
     job_start_date AS window_start, work_expiration_date AS window_end,
-    is_cancelled`;
+    is_cancelled, date(job_start_date) AS created_day`;
 }
 
 function mapDigAlertRow(row: Record<string, unknown>): TicketCandidate {
@@ -53,6 +56,7 @@ function mapDigAlertRow(row: Record<string, unknown>): TicketCandidate {
     bboxMaxLat: Number(row.bbox_max_lat),
     windowStart: row.window_start ? String(row.window_start) : null,
     windowEnd: row.window_end ? String(row.window_end) : null,
+    createdDay: row.created_day ? String(row.created_day) : null,
   };
 }
 
@@ -68,8 +72,15 @@ function mapUsanRow(system: 'usan-ca' | 'usan-nv', row: Record<string, unknown>)
     bboxMaxLat: Number(row.bbox_max_lat),
     windowStart: row.window_start ? String(row.window_start) : null,
     windowEnd: row.window_end ? String(row.window_end) : null,
+    createdDay: row.created_day ? String(row.created_day) : null,
     isCancelled: row.is_cancelled != null ? Number(row.is_cancelled) : null,
   };
+}
+
+/** Overlaps count only when tickets were filed on different calendar days. */
+export function createdOnDifferentDays(a: TicketCandidate, b: TicketCandidate): boolean {
+  if (!a.createdDay || !b.createdDay) return false;
+  return a.createdDay !== b.createdDay;
 }
 
 export function workWindowsOverlap(a: TicketCandidate, b: TicketCandidate): boolean {
@@ -152,6 +163,15 @@ export async function findOverlapCandidates(
       }
     }
 
+    let differentDay = '';
+    if (source.createdDay) {
+      differentDay =
+        system === 'digalert'
+          ? `AND date(completed) != ?`
+          : `AND date(job_start_date) != ?`;
+      binds.push(source.createdDay);
+    }
+
     const select = system === 'digalert' ? digAlertSelect() : usanSelect();
     const sql = `SELECT ${select} FROM ${table}
       WHERE bbox_min_lon IS NOT NULL
@@ -159,6 +179,7 @@ export async function findOverlapCandidates(
         AND bbox_max_lat >= ? AND bbox_min_lat <= ?
         ${exclude}
         ${temporal}
+        ${differentDay}
       LIMIT ${CANDIDATE_CAP}`;
 
     const { results } = await db.prepare(sql).bind(...binds).all<Record<string, unknown>>();

@@ -25,7 +25,13 @@ function tableForSystem(system: TicketSystem): string {
   return 'usan_nv_tickets';
 }
 
-const BROWSE_PAGE_SIZE = 30;
+const BROWSE_PAGE_SIZE = 100;
+
+function perSystemPageLimits(pageSize: number, systemCount: number): number[] {
+  const base = Math.floor(pageSize / systemCount);
+  const extra = pageSize % systemCount;
+  return Array.from({ length: systemCount }, (_, i) => base + (i < extra ? 1 : 0));
+}
 
 function buildBadgeConditions(system: TicketSystem, badges?: BadgeFilter[]) {
   if (!badges?.length) return [];
@@ -104,24 +110,11 @@ export async function listTickets(db: D1Database, system: TicketSystem, params: 
   return results ?? [];
 }
 
-function unionSelect(system: TicketSystem): string {
-  const table = tableForSystem(system);
-  if (system === 'digalert') {
-    return `SELECT 'digalert' AS system, ticket_number, revision, updated_at,
-      place, street, location, work_type, NULL AS address, NULL AS work_activity, had_late_response,
-      polygon_wkt, centroid_x, centroid_y
-      FROM ${table}`;
-  }
-  return `SELECT '${system}' AS system, ticket_number, NULL AS revision, updated_at,
-    NULL AS place, NULL AS street, NULL AS location, work_type, address, work_activity, had_late_response,
-    polygon_wkt, NULL AS centroid_x, NULL AS centroid_y
-    FROM ${table}`;
-}
-
 export async function listTicketsMulti(db: D1Database, systems: TicketSystem[], params: ListParams) {
   const selected = systems.length ? systems : (['digalert', 'usan-ca', 'usan-nv'] as TicketSystem[]);
-  const limit = params.limit ?? BROWSE_PAGE_SIZE;
+  const pageSize = params.limit ?? BROWSE_PAGE_SIZE;
   const offset = params.offset ?? 0;
+  const page = Math.floor(offset / pageSize);
 
   let total = 0;
   for (const system of selected) {
@@ -129,24 +122,29 @@ export async function listTicketsMulti(db: D1Database, systems: TicketSystem[], 
   }
 
   if (!total) {
-    return { tickets: [], total, limit, offset };
+    return { tickets: [], total, limit: pageSize, offset };
   }
 
-  const parts: string[] = [];
-  const binds: unknown[] = [];
-  for (const system of selected) {
-    const { where, binds: systemBinds } = buildListConditions(system, params);
-    parts.push(`${unionSelect(system)} ${where}`);
-    binds.push(...systemBinds);
+  const perSystemLimits = perSystemPageLimits(pageSize, selected.length);
+  const merged: Record<string, unknown>[] = [];
+
+  for (let i = 0; i < selected.length; i++) {
+    const system = selected[i];
+    const systemLimit = perSystemLimits[i];
+    const systemOffset = page * systemLimit;
+    const rows = await listTickets(db, system, {
+      ...params,
+      limit: systemLimit,
+      offset: systemOffset,
+    });
+    for (const row of rows) {
+      merged.push({ ...row, system });
+    }
   }
 
-  const sql = `SELECT * FROM (${parts.join(' UNION ALL ')}) ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
-  const { results } = await db
-    .prepare(sql)
-    .bind(...binds, limit, offset)
-    .all<Record<string, unknown>>();
+  merged.sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')));
 
-  return { tickets: results ?? [], total, limit, offset };
+  return { tickets: merged.slice(0, pageSize), total, limit: pageSize, offset };
 }
 
 export async function getDigAlertDetail(db: D1Database, ticketNumber: string, revision = '00A') {
