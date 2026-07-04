@@ -149,11 +149,13 @@ function unionSelect(system: TicketSystem): string {
   const table = tableForSystem(system);
   if (system === 'digalert') {
     return `SELECT 'digalert' AS system, ticket_number, revision, updated_at,
-      place, street, location, work_type, NULL AS address, NULL AS work_activity, had_late_response
+      place, street, location, work_type, NULL AS address, NULL AS work_activity, had_late_response,
+      polygon_wkt, centroid_x, centroid_y
       FROM ${table}`;
   }
   return `SELECT '${system}' AS system, ticket_number, NULL AS revision, updated_at,
-    NULL AS place, NULL AS street, NULL AS location, work_type, address, work_activity, had_late_response
+    NULL AS place, NULL AS street, NULL AS location, work_type, address, work_activity, had_late_response,
+    polygon_wkt, NULL AS centroid_x, NULL AS centroid_y
     FROM ${table}`;
 }
 

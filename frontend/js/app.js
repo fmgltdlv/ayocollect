@@ -26,6 +26,8 @@ let state = {
   searchMap: null,
   detailMap: null,
   drawLayer: null,
+  drawnGroup: null,
+  ticketLayerGroup: null,
   jobsPollId: null,
 };
 
@@ -52,13 +54,6 @@ async function refreshStopped() {
 
 document.querySelectorAll('.tab').forEach((btn) => {
   btn.addEventListener('click', () => setView(btn.dataset.view));
-});
-
-document.getElementById('all-stop-btn').addEventListener('click', async () => {
-  if (!confirm('ALL STOP — cancel all jobs and abort in-flight fetches?')) return;
-  await api.stopAll();
-  await refreshStopped();
-  render();
 });
 
 function systemLabel(s) {
@@ -109,6 +104,7 @@ function browseFiltersFromDom() {
 
 function renderBrowseResults(tickets, total, page) {
   const resultsEl = document.getElementById('results');
+  updateBrowseMapTickets(tickets);
   if (!tickets.length) {
     resultsEl.textContent = 'No tickets found.';
     return;
@@ -164,28 +160,47 @@ function renderBrowseResults(tickets, total, page) {
 }
 
 function renderBrowse() {
+  const { startDate = '', endDate = '', ticketNumber = '' } = state.browseParams;
   app.innerHTML = `
-    <div class="panel">
-      <div class="row checks">
-        <span class="label-text">Systems</span>
-        <label><input type="checkbox" id="browse-da" ${state.browseSystems.includes('digalert') ? 'checked' : ''} /> Dig Alert</label>
-        <label><input type="checkbox" id="browse-ca" ${state.browseSystems.includes('usan-ca') ? 'checked' : ''} /> USAN CA</label>
-        <label><input type="checkbox" id="browse-nv" ${state.browseSystems.includes('usan-nv') ? 'checked' : ''} /> USAN NV</label>
+    <div class="panel browse-panel">
+      <h2 class="panel-heading">Browse tickets</h2>
+      <div class="browse-filters">
+        <div class="filter-group">
+          <span class="filter-label">Systems</span>
+          <div class="chip-group">
+            <label class="chip-check"><input type="checkbox" id="browse-da" ${state.browseSystems.includes('digalert') ? 'checked' : ''} /><span>Dig Alert</span></label>
+            <label class="chip-check"><input type="checkbox" id="browse-ca" ${state.browseSystems.includes('usan-ca') ? 'checked' : ''} /><span>USAN CA</span></label>
+            <label class="chip-check"><input type="checkbox" id="browse-nv" ${state.browseSystems.includes('usan-nv') ? 'checked' : ''} /><span>USAN NV</span></label>
+          </div>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Badges</span>
+          <div class="chip-group">
+            <label class="chip-check chip-badge"><input type="checkbox" id="browse-badge-pending" ${state.browseBadges.includes('pending') ? 'checked' : ''} /><span class="badge badge-pending">Pending</span></label>
+            <label class="chip-check chip-badge"><input type="checkbox" id="browse-badge-blocker" ${state.browseBadges.includes('blocker') ? 'checked' : ''} /><span class="badge badge-blocker">Blocker</span></label>
+            <label class="chip-check chip-badge"><input type="checkbox" id="browse-badge-late" ${state.browseBadges.includes('late') ? 'checked' : ''} /><span class="badge badge-late">Late</span></label>
+          </div>
+        </div>
+        <div class="filter-group filter-group-wide">
+          <span class="filter-label">Date range</span>
+          <div class="date-range">
+            <label class="field-inline"><span>From</span><input type="date" id="start-date" value="${startDate}" /></label>
+            <span class="date-sep" aria-hidden="true">–</span>
+            <label class="field-inline"><span>To</span><input type="date" id="end-date" value="${endDate}" /></label>
+          </div>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Ticket #</span>
+          <input type="text" id="ticket-filter" class="filter-input" placeholder="Optional" value="${ticketNumber}" />
+        </div>
+        <div class="filter-actions">
+          <button class="btn" id="search-btn" type="button">Search</button>
+        </div>
       </div>
-      <div class="row checks">
-        <span class="label-text">Badges</span>
-        <label><input type="checkbox" id="browse-badge-pending" ${state.browseBadges.includes('pending') ? 'checked' : ''} /> <span class="badge badge-pending">Pending</span></label>
-        <label><input type="checkbox" id="browse-badge-blocker" ${state.browseBadges.includes('blocker') ? 'checked' : ''} /> <span class="badge badge-blocker">Blocker</span></label>
-        <label><input type="checkbox" id="browse-badge-late" ${state.browseBadges.includes('late') ? 'checked' : ''} /> <span class="badge badge-late">Late</span></label>
+      <div class="map-section">
+        <p class="map-hint">Draw a rectangle to filter by area. Ticket polygons for the current page appear on the map.</p>
+        <div id="search-map"></div>
       </div>
-      <div class="row">
-        <label>Start date <input type="date" id="start-date" /></label>
-        <label>End date <input type="date" id="end-date" /></label>
-        <label>Ticket # <input type="text" id="ticket-filter" placeholder="optional" /></label>
-        <button class="btn" id="search-btn" type="button">Search</button>
-      </div>
-      <p class="muted">Draw a rectangle on the map to search by bounding box (coarse overlap). Results show the 30 most recent matches per page.</p>
-      <div id="search-map"></div>
     </div>
     <div class="panel"><div id="results">Loading…</div></div>
   `;
@@ -203,13 +218,19 @@ function initSearchMap() {
     state.searchMap.remove();
     state.searchMap = null;
   }
+  state.drawnGroup = null;
+  state.ticketLayerGroup = null;
+  state.drawLayer = null;
+
   state.searchMap = L.map('search-map').setView([36.16, -115.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap',
   }).addTo(state.searchMap);
 
-  const drawn = new L.FeatureGroup();
-  state.searchMap.addLayer(drawn);
+  state.drawnGroup = new L.FeatureGroup();
+  state.ticketLayerGroup = new L.FeatureGroup();
+  state.searchMap.addLayer(state.drawnGroup);
+  state.searchMap.addLayer(state.ticketLayerGroup);
 
   state.searchMap.addControl(
     new L.Control.Draw({
@@ -219,23 +240,86 @@ function initSearchMap() {
         circle: false,
         circlemarker: false,
         marker: false,
-        rectangle: true,
+        rectangle: {
+          shapeOptions: { color: '#eab308', weight: 2, fillOpacity: 0.08 },
+        },
       },
-      edit: { featureGroup: drawn },
+      edit: { featureGroup: state.drawnGroup },
     })
   );
 
   state.searchMap.on(L.Draw.Event.CREATED, (e) => {
-    drawn.clearLayers();
-    drawn.addLayer(e.layer);
+    state.drawnGroup.clearLayers();
+    state.drawnGroup.addLayer(e.layer);
     state.drawLayer = e.layer;
   });
+
+  state.searchMap.on(L.Draw.Event.DELETED, () => {
+    state.drawLayer = null;
+  });
+}
+
+const BROWSE_SYSTEM_COLORS = {
+  digalert: '#3b82f6',
+  'usan-ca': '#22c55e',
+  'usan-nv': '#f97316',
+};
+
+function updateBrowseMapTickets(tickets) {
+  if (!state.searchMap || !state.ticketLayerGroup) return;
+
+  state.ticketLayerGroup.clearLayers();
+  const boundsLayers = [];
+
+  for (const t of tickets) {
+    const color = BROWSE_SYSTEM_COLORS[t.system] ?? '#3b82f6';
+    const label = `${systemLabel(t.system)} — ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
+    const latlngs = parseWktToLatLngs(t.polygon_wkt);
+
+    if (latlngs.length) {
+      const poly = L.polygon(latlngs, {
+        color,
+        weight: 2,
+        fillOpacity: 0.2,
+      });
+      poly.bindTooltip(label, { sticky: true });
+      poly.on('click', () => openDetail(t.system, t.ticket_number, t.revision ?? '00A'));
+      state.ticketLayerGroup.addLayer(poly);
+      boundsLayers.push(poly);
+      continue;
+    }
+
+    if (t.centroid_y != null && t.centroid_x != null) {
+      const marker = L.circleMarker([t.centroid_y, t.centroid_x], {
+        radius: 7,
+        color,
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 0.55,
+      });
+      marker.bindTooltip(label, { sticky: true });
+      marker.on('click', () => openDetail(t.system, t.ticket_number, t.revision ?? '00A'));
+      state.ticketLayerGroup.addLayer(marker);
+      boundsLayers.push(marker);
+    }
+  }
+
+  if (state.drawLayer) boundsLayers.push(state.drawLayer);
+
+  if (boundsLayers.length) {
+    const combined = boundsLayers[0].getBounds();
+    for (let i = 1; i < boundsLayers.length; i++) {
+      combined.extend(boundsLayers[i].getBounds());
+    }
+    state.searchMap.fitBounds(combined, { padding: [28, 28], maxZoom: 15 });
+  }
 }
 
 async function runBrowseSearch(page = 0) {
   const systems = browseSystemsFromDom();
   if (!systems.length) {
     document.getElementById('results').textContent = 'Select at least one system.';
+    updateBrowseMapTickets([]);
     return;
   }
 
@@ -260,6 +344,7 @@ async function runBrowseSearch(page = 0) {
     renderBrowseResults(tickets, total, page);
   } catch (e) {
     resultsEl.textContent = e.message;
+    updateBrowseMapTickets([]);
   }
 }
 
@@ -705,7 +790,6 @@ function renderSignIn(status) {
   app.innerHTML = `
     <section class="panel signin-panel">
       <h2>Sign in required</h2>
-      <p>811 Ticket Analytics is restricted to @aspadeco.com accounts.</p>
       ${status.error ? `<p class="error">${status.error}</p>` : ''}
       <div id="signin-mount" class="signin-mount"></div>
     </section>
