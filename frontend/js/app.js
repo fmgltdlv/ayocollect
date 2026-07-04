@@ -1199,27 +1199,51 @@ async function renderAnalytics() {
       </div>
     </div>
     <div class="analytics-grid">
-      <div class="panel">
-        <h3>By system</h3>
-        <table>
-          <thead><tr><th>System</th><th>Total</th><th>Active</th><th>Pending</th><th>Blockers</th><th>Late</th><th>Geometry</th></tr></thead>
-          <tbody>
-            ${summary.bySystem
-              .map(
-                (s) => `
-              <tr>
-                <td>${systemLabel(s.system)}</td>
-                <td>${s.total.toLocaleString()}</td>
-                <td>${s.active.toLocaleString()}</td>
-                <td>${s.badges.pending.toLocaleString()}</td>
-                <td>${s.badges.blocker.toLocaleString()}</td>
-                <td>${s.badges.late.toLocaleString()}</td>
-                <td>${s.geometryCoveragePct}%</td>
-              </tr>`
+      <div class="analytics-stack">
+        <div class="panel">
+          <h3>By system</h3>
+          <table>
+            <thead><tr><th>System</th><th>Total</th><th>Active</th><th>Pending</th><th>Blockers</th><th>Late</th><th>Geometry</th></tr></thead>
+            <tbody>
+              ${summary.bySystem
+                .map(
+                  (s) => `
+                <tr>
+                  <td>${systemLabel(s.system)}</td>
+                  <td>${s.total.toLocaleString()}</td>
+                  <td>${s.active.toLocaleString()}</td>
+                  <td>${s.badges.pending.toLocaleString()}</td>
+                  <td>${s.badges.blocker.toLocaleString()}</td>
+                  <td>${s.badges.late.toLocaleString()}</td>
+                  <td>${s.geometryCoveragePct}%</td>
+                </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h3>Ingest trend (30 days)</h3>
+          <table>
+            <thead><tr><th>Date</th><th>Dig Alert</th><th>USAN CA</th><th>USAN NV</th></tr></thead>
+            <tbody>
+              ${(trends.trend.length
+                ? trends.trend.slice(-14)
+                : [{ date: '—' }]
               )
-              .join('')}
-          </tbody>
-        </table>
+                .map(
+                  (row) => `
+                <tr>
+                  <td>${escapeHtml(row.date)}</td>
+                  <td>${row.digalert ?? 0}</td>
+                  <td>${row['usan-ca'] ?? 0}</td>
+                  <td>${row['usan-nv'] ?? 0}</td>
+                </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
       </div>
       <div class="panel">
         <h3>Top work types</h3>
@@ -1241,28 +1265,6 @@ async function renderAnalytics() {
           )
           .join('')}
       </div>
-    </div>
-    <div class="panel">
-      <h3>Ingest trend (30 days)</h3>
-      <table>
-        <thead><tr><th>Date</th><th>Dig Alert</th><th>USAN CA</th><th>USAN NV</th></tr></thead>
-        <tbody>
-          ${(trends.trend.length
-            ? trends.trend.slice(-14)
-            : [{ date: '—' }]
-          )
-            .map(
-              (row) => `
-            <tr>
-              <td>${escapeHtml(row.date)}</td>
-              <td>${row.digalert ?? 0}</td>
-              <td>${row['usan-ca'] ?? 0}</td>
-              <td>${row['usan-nv'] ?? 0}</td>
-            </tr>`
-            )
-            .join('')}
-        </tbody>
-      </table>
     </div>
     ${
       hotspots.length
