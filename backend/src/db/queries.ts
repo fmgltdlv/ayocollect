@@ -191,51 +191,6 @@ export async function listTicketsMulti(db: D1Database, systems: TicketSystem[], 
   return { tickets: merged.slice(0, pageSize), total, limit: pageSize, offset };
 }
 
-export const MAP_POINTS_CAP = 5000;
-
-const DIGALERT_MAP_COLUMNS =
-  'ticket_number, revision, centroid_x, centroid_y, bbox_min_lon, bbox_min_lat, bbox_max_lon, bbox_max_lat';
-const USAN_MAP_COLUMNS = 'ticket_number, bbox_min_lon, bbox_min_lat, bbox_max_lon, bbox_max_lat';
-
-async function listMapPoints(
-  db: D1Database,
-  system: TicketSystem,
-  params: ListParams,
-  limit: number
-): Promise<Record<string, unknown>[]> {
-  const table = tableForSystem(system);
-  const { where, binds } = buildListConditions(system, params);
-  const columns = system === 'digalert' ? DIGALERT_MAP_COLUMNS : USAN_MAP_COLUMNS;
-  const { results } = await db
-    .prepare(`SELECT ${columns} FROM ${table} ${where} LIMIT ?`)
-    .bind(...binds, limit)
-    .all<Record<string, unknown>>();
-  return results ?? [];
-}
-
-export async function listMapPointsMulti(
-  db: D1Database,
-  systems: TicketSystem[],
-  params: ListParams
-): Promise<{ points: Record<string, unknown>[]; capped: boolean }> {
-  const selected = systems.length ? systems : (['digalert', 'usan-ca', 'usan-nv'] as TicketSystem[]);
-  const perSystem = Math.ceil(MAP_POINTS_CAP / selected.length);
-  const rowSets = await Promise.all(
-    selected.map((system) => listMapPoints(db, system, params, perSystem))
-  );
-
-  let capped = false;
-  const points: Record<string, unknown>[] = [];
-  for (let i = 0; i < selected.length; i++) {
-    if (rowSets[i].length >= perSystem) capped = true;
-    for (const row of rowSets[i]) {
-      points.push({ ...row, system: selected[i] });
-    }
-  }
-
-  return { points, capped };
-}
-
 export type TicketPolygonRef = {
   system: TicketSystem;
   ticketNumber: string;

@@ -13,7 +13,6 @@ import {
   enrichListWithBadges,
   getDigAlertDetail,
   getUsanDetail,
-  listMapPointsMulti,
   listTickets,
   listTicketsMulti,
   loadTicketPolygons,
@@ -74,17 +73,6 @@ app.use(
 );
 
 app.route('/api/ingest', ingestRoutes);
-
-function scrapingDisabledResponse(c: { env: Env; json: (body: unknown, status?: number) => Response }) {
-  if (workerScrapingEnabled(c.env)) return null;
-  return c.json(
-    {
-      error:
-        'Single-ticket fetch on the Worker is disabled. Use Browse for stored tickets, or run a batch job (triggers the dedicated scraper container).',
-    },
-    503
-  );
-}
 
 app.get('/api/health', async (c) =>
   c.json({
@@ -342,16 +330,6 @@ app.get('/api/tickets', async (c) => {
   return c.json({ tickets, total, limit, offset });
 });
 
-app.get('/api/tickets/map-points', async (c) => {
-  const systems = parseSystems(c.req.query.bind(c.req));
-  if (!systems.length) {
-    return c.json({ error: 'At least one system required (systems=digalert,usan-ca,usan-nv)' }, 400);
-  }
-  const params = listQuery(c);
-  const { points, capped } = await listMapPointsMulti(c.env.DB, systems, params);
-  return c.json({ points, capped, total: points.length });
-});
-
 app.post('/api/tickets/polygons', async (c) => {
   const body = await c.req.json<{ tickets?: { system: TicketSystem; ticketNumber: string; revision?: string }[] }>();
   if (!body.tickets?.length) {
@@ -436,8 +414,6 @@ app.get('/api/tickets/:system/:ticketNumber/overlaps', async (c) => {
 });
 
 app.post('/api/digalert/fetch', adminOnly, async (c) => {
-  const blocked = scrapingDisabledResponse(c);
-  if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string; revision?: string }>();
   const payload = await fetchDigAlertRaw(body.ticket, body.revision ?? '00A');
   if (!payload) return c.json({ error: 'Fetch failed' }, 502);
@@ -447,8 +423,6 @@ app.post('/api/digalert/fetch', adminOnly, async (c) => {
 });
 
 app.post('/api/usan-ca/fetch', adminOnly, async (c) => {
-  const blocked = scrapingDisabledResponse(c);
-  if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string }>();
   const posr = await fetchUsanPosr('ca', body.ticket);
   if (!posr) return c.json({ error: 'Fetch failed' }, 502);
@@ -459,8 +433,6 @@ app.post('/api/usan-ca/fetch', adminOnly, async (c) => {
 });
 
 app.post('/api/usan-nv/fetch', adminOnly, async (c) => {
-  const blocked = scrapingDisabledResponse(c);
-  if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string }>();
   const posr = await fetchUsanPosr('nv', body.ticket);
   if (!posr) return c.json({ error: 'Fetch failed' }, 502);

@@ -35,9 +35,7 @@ let state = {
   ticketClusterGroup: null,
   ticketPolygonGroup: null,
   browseMapMode: null,
-  browseMapTickets: [],
   browsePageTickets: [],
-  browseMapCapped: false,
   browsePolygonByKey: {},
   browsePolygonLoading: false,
   jobsPollId: null,
@@ -473,7 +471,7 @@ function renderBrowse() {
           </div>
         </div>
         <div class="map-section">
-          <p class="map-hint">Map shows all matching tickets from selected systems (blue Dig Alert, green USAN CA, orange USAN NV). Draw a rectangle to filter by area. Zoom out for clusters, zoom in (17+) for polygons on the current page.</p>
+          <p class="map-hint">Map shows tickets on the current page only (blue Dig Alert, green USAN CA, orange USAN NV). Draw a rectangle to filter by area. Zoom in (17+) for polygons.</p>
           <div id="browse-map-legend" class="browse-map-legend hidden" aria-hidden="true"></div>
           <div id="search-map"></div>
         </div>
@@ -501,10 +499,8 @@ function initSearchMap() {
   state.ticketPolygonGroup = null;
   state.browseMapMode = null;
   state.drawLayer = null;
-  state.browseMapTickets = [];
   state.browsePageTickets = [];
   state.browsePolygonByKey = {};
-  state.browseMapCapped = false;
 
   state.searchMap = L.map('search-map').setView([36.16, -115.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -694,16 +690,14 @@ function renderBrowseMapTickets(fitBounds = false) {
   state.ticketClusterGroup.clearLayers();
   state.ticketPolygonGroup.clearLayers();
   const boundsLayers = [];
-  const pageKeys = new Set(state.browsePageTickets.map(ticketPolygonKey));
 
-  for (const t of state.browseMapTickets) {
+  for (const t of state.browsePageTickets) {
     const color = BROWSE_SYSTEM_COLORS[t.system] ?? '#3b82f6';
     const label = `${systemLabel(t.system)} — ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
-    const key = ticketPolygonKey(t);
-    const polygonWkt = state.browsePolygonByKey[key] ?? t.polygon_wkt;
+    const polygonWkt = state.browsePolygonByKey[ticketPolygonKey(t)] ?? t.polygon_wkt;
     const latlngs = parseWktToLatLngs(polygonWkt);
 
-    if (mode === 'hybrid' && pageKeys.has(key) && latlngs.length) {
+    if (mode === 'hybrid' && latlngs.length) {
       const poly = createBrowseTicketPolygon(t, latlngs, color, label);
       state.ticketPolygonGroup.addLayer(poly);
       boundsLayers.push(poly);
@@ -735,7 +729,7 @@ function renderBrowseMapTickets(fitBounds = false) {
 function updateBrowseMapLegend() {
   const legend = document.getElementById('browse-map-legend');
   if (!legend) return;
-  const systems = [...new Set(state.browseMapTickets.map((t) => t.system))];
+  const systems = [...new Set(state.browsePageTickets.map((t) => t.system))];
   if (!systems.length) {
     legend.classList.add('hidden');
     legend.innerHTML = '';
@@ -748,9 +742,6 @@ function updateBrowseMapLegend() {
         `<span class="browse-legend-item"><span class="browse-legend-swatch" style="background:${BROWSE_SYSTEM_COLORS[system]}"></span>${systemLabel(system)}</span>`
     )
     .join('');
-  if (state.browseMapCapped) {
-    legend.innerHTML += '<span class="browse-legend-capped muted">Map capped at 5,000 tickets — zoom in or narrow filters.</span>';
-  }
 }
 
 async function maybeLoadBrowsePolygons() {
@@ -788,10 +779,8 @@ function refreshBrowseMap(fitBounds = false) {
 }
 
 function clearBrowseMap() {
-  state.browseMapTickets = [];
   state.browsePageTickets = [];
   state.browsePolygonByKey = {};
-  state.browseMapCapped = false;
   refreshBrowseMap(false);
 }
 
@@ -819,18 +808,10 @@ async function runBrowseSearch(page = 0) {
   const resultsEl = document.getElementById('results');
   resultsEl.textContent = 'Loading…';
   try {
-    const requests = [api.browseTickets(systems, params)];
-    if (page === 0) {
-      requests.push(api.browseMapPoints(systems, state.browseParams));
-    }
-    const [browseResult, mapResult] = await Promise.all(requests);
-    if (mapResult) {
-      state.browseMapTickets = mapResult.points;
-      state.browseMapCapped = !!mapResult.capped;
-      state.browsePolygonByKey = {};
-    }
-    state.browseTotal = browseResult.total;
-    renderBrowseResults(browseResult.tickets, browseResult.total, page, page === 0);
+    state.browsePolygonByKey = {};
+    const { tickets, total } = await api.browseTickets(systems, params);
+    state.browseTotal = total;
+    renderBrowseResults(tickets, total, page, page === 0);
   } catch (e) {
     resultsEl.textContent = e.message;
     clearBrowseMap();

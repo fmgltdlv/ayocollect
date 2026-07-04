@@ -42,10 +42,6 @@ export const api = {
     const q = new URLSearchParams({ ...params, systems: systems.join(',') }).toString();
     return request(`/tickets?${q}`);
   },
-  browseMapPoints: (systems, params = {}) => {
-    const q = new URLSearchParams({ ...params, systems: systems.join(',') }).toString();
-    return request(`/tickets/map-points?${q}`);
-  },
   browseTicketPolygons: (tickets) =>
     request('/tickets/polygons', { method: 'POST', body: JSON.stringify({ tickets }) }),
   getTicket: (system, ticketNumber, revision) => {
