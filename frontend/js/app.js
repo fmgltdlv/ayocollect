@@ -13,6 +13,7 @@ const detailTab = document.getElementById('detail-tab');
 const authArea = document.getElementById('auth-area');
 
 const BROWSE_PAGE_SIZE = 30;
+const BROWSE_POLYGON_MAX_ZOOM = 17;
 
 let state = {
   view: 'browse',
@@ -28,6 +29,7 @@ let state = {
   drawLayer: null,
   drawnGroup: null,
   ticketLayerGroup: null,
+  browseMapTickets: [],
   jobsPollId: null,
 };
 
@@ -68,6 +70,157 @@ function ticketRowLabel(t, system) {
     return [t.place, t.street, t.work_type].filter(Boolean).join(' · ') || t.location || '—';
   }
   return [t.address, t.work_type, t.work_activity].filter(Boolean).join(' · ') || '—';
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatTicketFieldValue(key, value) {
+  if (value === null || value === undefined || value === '') {
+    return '<span class="muted">—</span>';
+  }
+  if (typeof value === 'number' && (key.startsWith('is_') || key === 'one_year')) {
+    return value ? 'Yes' : 'No';
+  }
+  if (key === 'map_link') {
+    const url = String(value);
+    return `<a class="info-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">Open map</a>`;
+  }
+  if (key.includes('date') || key === 'completed' || key.endsWith('_at')) {
+    const d = new Date(String(value));
+    if (!Number.isNaN(d.getTime())) {
+      return escapeHtml(d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }));
+    }
+  }
+  if (key === 'fetch_error') {
+    return `<span class="info-error">${escapeHtml(String(value))}</span>`;
+  }
+  return escapeHtml(String(value));
+}
+
+const DIGALERT_INFO_SECTIONS = [
+  {
+    title: 'Identification',
+    fields: [
+      { key: 'revision', label: 'Revision' },
+      { key: 'type', label: 'Type' },
+      { key: 'completed', label: 'Completed' },
+      { key: 'replace_by_date', label: 'Replace by' },
+    ],
+  },
+  {
+    title: 'Location',
+    fields: [
+      { key: 'place', label: 'Place' },
+      { key: 'street', label: 'Street' },
+      { key: 'st_from_address', label: 'From address' },
+      { key: 'cross1', label: 'Cross street 1' },
+      { key: 'cross2', label: 'Cross street 2' },
+      { key: 'location', label: 'Location notes' },
+      { key: 'county', label: 'County' },
+    ],
+  },
+  {
+    title: 'Work',
+    fields: [
+      { key: 'work_type', label: 'Work type' },
+      { key: 'work_order', label: 'Work order' },
+      { key: 'done_for', label: 'Done for' },
+      { key: 'one_year', label: 'One-year ticket' },
+    ],
+  },
+  {
+    title: 'Contact',
+    fields: [
+      { key: 'caller', label: 'Caller' },
+      { key: 'email', label: 'Email' },
+      { key: 'phone', label: 'Phone' },
+      { key: 'contact_phone', label: 'Contact phone' },
+    ],
+  },
+  {
+    title: 'Record',
+    fields: [
+      { key: 'fetch_status', label: 'Fetch status' },
+      { key: 'fetch_error', label: 'Fetch error' },
+      { key: 'created_at', label: 'Created' },
+      { key: 'updated_at', label: 'Updated' },
+    ],
+  },
+];
+
+const USAN_INFO_SECTIONS = [
+  {
+    title: 'Identification',
+    fields: [
+      { key: 'job_status', label: 'Job status' },
+      { key: 'is_cancelled', label: 'Cancelled' },
+      { key: 'is_successful', label: 'Successful' },
+      { key: 'trail_id', label: 'Trail ID' },
+    ],
+  },
+  {
+    title: 'Location',
+    fields: [
+      { key: 'address', label: 'Address' },
+      { key: 'map_link', label: 'Map link' },
+      { key: 'street_sidewalk_or_parkstrip', label: 'Street / sidewalk / parkstrip' },
+    ],
+  },
+  {
+    title: 'Schedule',
+    fields: [
+      { key: 'job_start_date', label: 'Job start' },
+      { key: 'work_expiration_date', label: 'Work expires' },
+    ],
+  },
+  {
+    title: 'Work',
+    fields: [
+      { key: 'work_type', label: 'Work type' },
+      { key: 'work_activity', label: 'Work activity' },
+      { key: 'excavation_method', label: 'Excavation method' },
+      { key: 'additional_remarks', label: 'Remarks' },
+    ],
+  },
+  {
+    title: 'Contact',
+    fields: [{ key: 'created_by', label: 'Created by' }],
+  },
+  {
+    title: 'Record',
+    fields: [
+      { key: 'fetch_status', label: 'Fetch status' },
+      { key: 'fetch_error', label: 'Fetch error' },
+      { key: 'created_at', label: 'Created' },
+      { key: 'updated_at', label: 'Updated' },
+    ],
+  },
+];
+
+function ticketInfoHtml(system, ticket) {
+  const sections = system === 'digalert' ? DIGALERT_INFO_SECTIONS : USAN_INFO_SECTIONS;
+  const html = sections
+    .map((section) => {
+      const rows = section.fields
+        .map(({ key, label }) => {
+          const value = ticket[key];
+          if (value === null || value === undefined || value === '') return '';
+          return `<div class="info-row"><dt class="info-label">${label}</dt><dd class="info-value">${formatTicketFieldValue(key, value)}</dd></div>`;
+        })
+        .filter(Boolean)
+        .join('');
+      if (!rows) return '';
+      return `<section class="info-section"><h4 class="info-section-title">${section.title}</h4><dl class="info-grid">${rows}</dl></section>`;
+    })
+    .filter(Boolean)
+    .join('');
+  return html || '<p class="muted">No ticket details available.</p>';
 }
 
 function browseSystemsFromDom() {
@@ -198,7 +351,7 @@ function renderBrowse() {
         </div>
       </div>
       <div class="map-section">
-        <p class="map-hint">Draw a rectangle to filter by area. Ticket polygons for the current page appear on the map.</p>
+        <p class="map-hint">Draw a rectangle to filter by area. Ticket shapes appear on the map; zoom in past level 17 to see pins.</p>
         <div id="search-map"></div>
       </div>
     </div>
@@ -221,6 +374,7 @@ function initSearchMap() {
   state.drawnGroup = null;
   state.ticketLayerGroup = null;
   state.drawLayer = null;
+  state.browseMapTickets = [];
 
   state.searchMap = L.map('search-map').setView([36.16, -115.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -257,6 +411,8 @@ function initSearchMap() {
   state.searchMap.on(L.Draw.Event.DELETED, () => {
     state.drawLayer = null;
   });
+
+  state.searchMap.on('zoomend', () => renderBrowseMapTickets(false));
 }
 
 const BROWSE_SYSTEM_COLORS = {
@@ -265,54 +421,88 @@ const BROWSE_SYSTEM_COLORS = {
   'usan-nv': '#f97316',
 };
 
-function updateBrowseMapTickets(tickets) {
+function ticketMapCenter(ticket, latlngs) {
+  if (ticket.centroid_y != null && ticket.centroid_x != null) {
+    return [ticket.centroid_y, ticket.centroid_x];
+  }
+  if (latlngs.length) {
+    const center = L.polygon(latlngs).getBounds().getCenter();
+    return [center.lat, center.lng];
+  }
+  return null;
+}
+
+function bindBrowseTicketLayer(layer, ticket, label) {
+  layer.bindTooltip(label, { sticky: true });
+  layer.on('click', () => openDetail(ticket.system, ticket.ticket_number, ticket.revision ?? '00A'));
+}
+
+function createBrowseTicketPin(ticket, latlng, color, label) {
+  const marker = L.circleMarker(latlng, {
+    radius: 7,
+    color,
+    weight: 2,
+    fillColor: color,
+    fillOpacity: 0.75,
+  });
+  bindBrowseTicketLayer(marker, ticket, label);
+  return marker;
+}
+
+function createBrowseTicketPolygon(ticket, latlngs, color, label) {
+  const poly = L.polygon(latlngs, {
+    color,
+    weight: 2,
+    fillOpacity: 0.2,
+  });
+  bindBrowseTicketLayer(poly, ticket, label);
+  return poly;
+}
+
+function browseMapUsesPins() {
+  return state.searchMap.getZoom() > BROWSE_POLYGON_MAX_ZOOM;
+}
+
+function renderBrowseMapTickets(fitBounds = false) {
   if (!state.searchMap || !state.ticketLayerGroup) return;
 
   state.ticketLayerGroup.clearLayers();
+  const usePins = browseMapUsesPins();
   const boundsLayers = [];
 
-  for (const t of tickets) {
+  for (const t of state.browseMapTickets) {
     const color = BROWSE_SYSTEM_COLORS[t.system] ?? '#3b82f6';
     const label = `${systemLabel(t.system)} — ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
     const latlngs = parseWktToLatLngs(t.polygon_wkt);
 
-    if (latlngs.length) {
-      const poly = L.polygon(latlngs, {
-        color,
-        weight: 2,
-        fillOpacity: 0.2,
-      });
-      poly.bindTooltip(label, { sticky: true });
-      poly.on('click', () => openDetail(t.system, t.ticket_number, t.revision ?? '00A'));
-      state.ticketLayerGroup.addLayer(poly);
-      boundsLayers.push(poly);
+    if (usePins || !latlngs.length) {
+      const center = ticketMapCenter(t, latlngs);
+      if (!center) continue;
+      const marker = createBrowseTicketPin(t, center, color, label);
+      state.ticketLayerGroup.addLayer(marker);
+      boundsLayers.push(marker);
       continue;
     }
 
-    if (t.centroid_y != null && t.centroid_x != null) {
-      const marker = L.circleMarker([t.centroid_y, t.centroid_x], {
-        radius: 7,
-        color,
-        weight: 2,
-        fillColor: color,
-        fillOpacity: 0.55,
-      });
-      marker.bindTooltip(label, { sticky: true });
-      marker.on('click', () => openDetail(t.system, t.ticket_number, t.revision ?? '00A'));
-      state.ticketLayerGroup.addLayer(marker);
-      boundsLayers.push(marker);
-    }
+    const poly = createBrowseTicketPolygon(t, latlngs, color, label);
+    state.ticketLayerGroup.addLayer(poly);
+    boundsLayers.push(poly);
   }
 
   if (state.drawLayer) boundsLayers.push(state.drawLayer);
 
-  if (boundsLayers.length) {
+  if (fitBounds && boundsLayers.length) {
     const combined = boundsLayers[0].getBounds();
     for (let i = 1; i < boundsLayers.length; i++) {
       combined.extend(boundsLayers[i].getBounds());
     }
     state.searchMap.fitBounds(combined, { padding: [28, 28], maxZoom: 15 });
   }
+}
+
+function updateBrowseMapTickets(tickets) {
+  state.browseMapTickets = tickets;
+  renderBrowseMapTickets(true);
 }
 
 async function runBrowseSearch(page = 0) {
@@ -726,14 +916,8 @@ function renderDetail() {
     <div class="detail-grid">
       <div class="panel">
         <h3>Ticket info</h3>
-        <dl class="mono">
-          ${Object.entries(t)
-            .filter(([k]) => !k.startsWith('bbox_') && k !== 'polygon_wkt')
-            .slice(0, 24)
-            .map(([k, v]) => `<dt>${k}</dt><dd>${v ?? ''}</dd>`)
-            .join('')}
-        </dl>
-        <h3>Utility responses (current)</h3>
+        <div class="ticket-info">${ticketInfoHtml(system, t)}</div>
+        <h3 class="detail-subheading">Utility responses (current)</h3>
         <table>
           <thead><tr><th>Code</th><th>Name</th><th>Resp</th><th>Description</th></tr></thead>
           <tbody>
