@@ -516,6 +516,15 @@ function createBrowseTicketPolygon(ticket, latlngs, color, label) {
   return poly;
 }
 
+function browseLayerBounds(layer) {
+  if (typeof layer.getBounds === 'function') return layer.getBounds();
+  if (typeof layer.getLatLng === 'function') {
+    const ll = layer.getLatLng();
+    return L.latLngBounds(ll, ll);
+  }
+  return null;
+}
+
 function renderBrowseMapTickets(fitBounds = false) {
   if (!state.searchMap || !state.ticketClusterGroup) return;
 
@@ -549,11 +558,15 @@ function renderBrowseMapTickets(fitBounds = false) {
   if (state.drawLayer) boundsLayers.push(state.drawLayer);
 
   if (fitBounds && boundsLayers.length) {
-    const combined = boundsLayers[0].getBounds();
-    for (let i = 1; i < boundsLayers.length; i++) {
-      combined.extend(boundsLayers[i].getBounds());
+    const seed = browseLayerBounds(boundsLayers[0]);
+    if (seed) {
+      const combined = seed;
+      for (let i = 1; i < boundsLayers.length; i++) {
+        const next = browseLayerBounds(boundsLayers[i]);
+        if (next) combined.extend(next);
+      }
+      state.searchMap.fitBounds(combined, { padding: [28, 28], maxZoom: 12 });
     }
-    state.searchMap.fitBounds(combined, { padding: [28, 28], maxZoom: 12 });
   }
 }
 
