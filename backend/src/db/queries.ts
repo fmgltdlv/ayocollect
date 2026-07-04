@@ -1,4 +1,5 @@
 import { buildBadgeCondition, type BadgeFilter } from './badge-sql';
+import { enrichRowsWithBadges } from './list-badges';
 import { computeAnalytics, deriveDigAlertCurrentResponses, listBadges } from '../lib/analytics';
 import { countOverlapsForTicket, listOverlapsForTicket } from '../lib/overlaps';
 import { enrichUsanHistoryRow } from '../lib/usan-ticket';
@@ -26,6 +27,46 @@ function tableForSystem(system: TicketSystem): string {
 }
 
 const BROWSE_PAGE_SIZE = 100;
+
+const DIGALERT_LIST_COLUMNS = [
+  'id',
+  'ticket_number',
+  'revision',
+  'place',
+  'street',
+  'work_type',
+  'location',
+  'centroid_x',
+  'centroid_y',
+  'bbox_min_lon',
+  'bbox_min_lat',
+  'bbox_max_lon',
+  'bbox_max_lat',
+  'had_late_response',
+  'updated_at',
+  'completed',
+  'replace_by_date',
+].join(', ');
+
+const USAN_LIST_COLUMNS = [
+  'id',
+  'ticket_number',
+  'address',
+  'work_type',
+  'work_activity',
+  'bbox_min_lon',
+  'bbox_min_lat',
+  'bbox_max_lon',
+  'bbox_max_lat',
+  'had_late_response',
+  'updated_at',
+  'job_start_date',
+  'work_expiration_date',
+].join(', ');
+
+function listColumnsForSystem(system: TicketSystem): string {
+  return system === 'digalert' ? DIGALERT_LIST_COLUMNS : USAN_LIST_COLUMNS;
+}
 
 function perSystemPageLimits(pageSize: number, systemCount: number): number[] {
   const base = Math.floor(pageSize / systemCount);
@@ -102,8 +143,9 @@ export async function listTickets(db: D1Database, system: TicketSystem, params: 
   const limit = params.limit ?? BROWSE_PAGE_SIZE;
   const offset = params.offset ?? 0;
 
+  const columns = listColumnsForSystem(system);
   const { results } = await db
-    .prepare(`SELECT * FROM ${table} ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
+    .prepare(`SELECT ${columns} FROM ${table} ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
     .bind(...binds, limit, offset)
     .all<Record<string, unknown>>();
 
@@ -116,28 +158,30 @@ export async function listTicketsMulti(db: D1Database, systems: TicketSystem[], 
   const offset = params.offset ?? 0;
   const page = Math.floor(offset / pageSize);
 
-  let total = 0;
-  for (const system of selected) {
-    total += await countTickets(db, system, params);
-  }
+  const perSystemLimits = perSystemPageLimits(pageSize, selected.length);
 
+  const [counts, rowSets] = await Promise.all([
+    Promise.all(selected.map((system) => countTickets(db, system, params))),
+    Promise.all(
+      selected.map((system, i) =>
+        listTickets(db, system, {
+          ...params,
+          limit: perSystemLimits[i],
+          offset: page * perSystemLimits[i],
+        })
+      )
+    ),
+  ]);
+
+  const total = counts.reduce((sum, n) => sum + n, 0);
   if (!total) {
     return { tickets: [], total, limit: pageSize, offset };
   }
 
-  const perSystemLimits = perSystemPageLimits(pageSize, selected.length);
   const merged: Record<string, unknown>[] = [];
-
   for (let i = 0; i < selected.length; i++) {
     const system = selected[i];
-    const systemLimit = perSystemLimits[i];
-    const systemOffset = page * systemLimit;
-    const rows = await listTickets(db, system, {
-      ...params,
-      limit: systemLimit,
-      offset: systemOffset,
-    });
-    for (const row of rows) {
+    for (const row of rowSets[i]) {
       merged.push({ ...row, system });
     }
   }
@@ -261,26 +305,5 @@ export async function enrichListWithBadges(
   system: TicketSystem,
   rows: Record<string, unknown>[]
 ) {
-  const enriched = [];
-  for (const row of rows) {
-    const rowSystem = (row.system as TicketSystem | undefined) ?? system;
-    const tn = String(row.ticket_number);
-    if (rowSystem === 'digalert') {
-      const rev = String(row.revision ?? '00A');
-      const detail = await getDigAlertDetail(db, tn, rev);
-      enriched.push({
-        ...row,
-        system: rowSystem,
-        badges: detail?.badges ?? { isPending: false, hasBlockers: false, hadLateResponse: !!row.had_late_response },
-      });
-    } else {
-      const detail = await getUsanDetail(db, rowSystem, tn);
-      enriched.push({
-        ...row,
-        system: rowSystem,
-        badges: detail?.badges ?? { isPending: false, hasBlockers: false, hadLateResponse: !!row.had_late_response },
-      });
-    }
-  }
-  return enriched;
+  return enrichRowsWithBadges(db, system, rows);
 }

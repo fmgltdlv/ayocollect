@@ -331,6 +331,68 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
 
 .modal h2 { margin-top: 0; }
 
+.detail-modal {
+  max-width: min(1100px, 96vw);
+  max-height: 90vh;
+}
+
+.detail-modal-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-family: ui-monospace, monospace;
+  word-break: break-word;
+}
+
+.detail-modal-close {
+  flex-shrink: 0;
+}
+
+.detail-panel-inline {
+  margin-bottom: 0;
+}
+
+.detail-banner {
+  margin: 0.5rem 0;
+  border-radius: 6px;
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.overlap-note {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
+.history-pre {
+  max-height: 200px;
+  overflow: auto;
+}
+
+.detail-modal #detail-map {
+  height: 320px;
+}
+
+@media (max-width: 900px) {
+  .detail-modal .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .progress-bar {
   height: 8px;
   background: var(--bg);

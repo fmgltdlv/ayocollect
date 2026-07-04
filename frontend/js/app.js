@@ -9,7 +9,6 @@ import {
 
 const app = document.getElementById('app');
 const stoppedBanner = document.getElementById('stopped-banner');
-const detailTab = document.getElementById('detail-tab');
 const authArea = document.getElementById('auth-area');
 
 const BROWSE_PAGE_SIZE = 100;
@@ -26,6 +25,7 @@ let state = {
   browseBadges: [],
   detail: null,
   detailSystem: null,
+  detailBackdrop: null,
   analytics: null,
   analyticsMap: null,
   searchMap: null,
@@ -454,6 +454,17 @@ function ticketMapCenter(ticket, latlngs) {
   if (latlngs.length) {
     const center = L.polygon(latlngs).getBounds().getCenter();
     return [center.lat, center.lng];
+  }
+  if (
+    ticket.bbox_min_lat != null &&
+    ticket.bbox_max_lat != null &&
+    ticket.bbox_min_lon != null &&
+    ticket.bbox_max_lon != null
+  ) {
+    return [
+      (ticket.bbox_min_lat + ticket.bbox_max_lat) / 2,
+      (ticket.bbox_min_lon + ticket.bbox_max_lon) / 2,
+    ];
   }
   return null;
 }
@@ -1169,19 +1180,63 @@ function initAnalyticsMap(hotspots) {
 
 async function openDetail(system, ticketNumber, revision) {
   state.detailSystem = system;
-  detailTab.classList.remove('hidden');
-  setView('detail');
-  app.innerHTML = '<div class="panel">Loading detail…</div>';
+  const title = `${systemLabel(system)} — ${ticketNumber}${revision && revision !== '00A' ? ` / ${revision}` : ''}`;
+  openDetailModal(title);
   try {
     const detail = await api.getTicket(system, ticketNumber, revision);
     state.detail = detail;
     renderDetail();
   } catch (e) {
-    app.innerHTML = `<div class="panel">${e.message}</div>`;
+    const body = detailModalBody();
+    if (body) body.innerHTML = `<p class="error">${escapeHtml(e.message)}</p>`;
   }
 }
 
+function detailModalBody() {
+  return state.detailBackdrop?.querySelector('.detail-modal-body') ?? null;
+}
+
+function onDetailModalKeydown(e) {
+  if (e.key === 'Escape') closeDetailModal();
+}
+
+function closeDetailModal() {
+  document.removeEventListener('keydown', onDetailModalKeydown);
+  if (state.detailMap) {
+    state.detailMap.remove();
+    state.detailMap = null;
+  }
+  state.detailBackdrop?.remove();
+  state.detailBackdrop = null;
+  state.detail = null;
+  state.detailSystem = null;
+}
+
+function openDetailModal(title) {
+  closeDetailModal();
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop detail-modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
+      <div class="detail-modal-header">
+        <h2 class="detail-modal-title" id="detail-modal-title">${escapeHtml(title)}</h2>
+        <button class="btn-secondary detail-modal-close" type="button">Close</button>
+      </div>
+      <div class="detail-modal-body"><p class="muted">Loading detail…</p></div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  state.detailBackdrop = backdrop;
+  backdrop.querySelector('.detail-modal-close').addEventListener('click', closeDetailModal);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeDetailModal();
+  });
+  document.addEventListener('keydown', onDetailModalKeydown);
+}
+
 function renderDetail() {
+  const body = detailModalBody();
+  if (!body || !state.detail) return;
+
   const d = state.detail;
   const t = d.ticket;
   const system = state.detailSystem;
@@ -1190,18 +1245,20 @@ function renderDetail() {
   const overlaps = d.overlaps ?? [];
   const overlapCount = d.overlapCount ?? overlaps.length;
 
-  app.innerHTML = `
-    <div class="panel">
-      <h2>${systemLabel(system)} — <span class="mono">${t.ticket_number}</span></h2>
-      <p>${badgesHtml(d.badges)}</p>
-      ${d.analytics?.hadLateResponse ? '<p class="banner" style="margin:0.5rem 0">Ticket flagged — utility responded late (888/999 in history).</p>' : ''}
-    </div>
+  const titleEl = state.detailBackdrop?.querySelector('.detail-modal-title');
+  if (titleEl) {
+    titleEl.textContent = `${systemLabel(system)} — ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
+  }
+
+  body.innerHTML = `
+    <p>${badgesHtml(d.badges)}</p>
+    ${d.analytics?.hadLateResponse ? '<p class="banner detail-banner">Ticket flagged — utility responded late (888/999 in history).</p>' : ''}
     <div class="detail-grid">
-      <div class="panel">
+      <div class="panel detail-panel-inline">
         <h3>Ticket info</h3>
         <div class="ticket-info">${ticketInfoHtml(system, t)}</div>
         <h3 class="detail-subheading">Overlapping tickets (${overlapCount})</h3>
-        <p class="muted" style="margin:0 0 0.5rem;font-size:0.85rem">Only tickets filed on different days are counted (same-day tickets are usually from the same caller).</p>
+        <p class="muted overlap-note">Only tickets filed on different days are counted (same-day tickets are usually from the same caller).</p>
         ${
           overlaps.length
             ? `<table>
@@ -1240,17 +1297,17 @@ function renderDetail() {
           </tbody>
         </table>
         <details><summary>History (${history.length})</summary>
-          <pre class="mono" style="max-height:200px;overflow:auto">${JSON.stringify(history.slice(0, 20), null, 2)}</pre>
+          <pre class="mono history-pre">${JSON.stringify(history.slice(0, 20), null, 2)}</pre>
         </details>
       </div>
-      <div class="panel">
+      <div class="panel detail-panel-inline">
         <h3>Map</h3>
         <div id="detail-map"></div>
       </div>
     </div>
   `;
 
-  app.querySelectorAll('.overlap-row').forEach((tr) => {
+  body.querySelectorAll('.overlap-row').forEach((tr) => {
     tr.addEventListener('click', () =>
       openDetail(tr.dataset.system, tr.dataset.ticket, tr.dataset.revision)
     );
@@ -1258,7 +1315,10 @@ function renderDetail() {
 
   setTimeout(async () => {
     if (state.detailMap) state.detailMap.remove();
-    state.detailMap = L.map('detail-map').setView([36.16, -115.15], 12);
+    const mapEl = body.querySelector('#detail-map');
+    if (!mapEl) return;
+
+    state.detailMap = L.map(mapEl).setView([36.16, -115.15], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap',
     }).addTo(state.detailMap);
@@ -1293,6 +1353,7 @@ function renderDetail() {
       const group = L.featureGroup(layers);
       state.detailMap.fitBounds(group.getBounds().pad(0.1));
     }
+    state.detailMap.invalidateSize();
   }, 0);
 }
 
@@ -1446,7 +1507,6 @@ function render() {
   else if (state.view === 'fetch') renderFetch();
   else if (state.view === 'jobs') renderJobs();
   else if (state.view === 'admin') renderAdmin();
-  else if (state.view === 'detail' && state.detail) renderDetail();
 }
 
 function renderSignIn(status) {
