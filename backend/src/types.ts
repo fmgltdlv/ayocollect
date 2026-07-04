@@ -15,6 +15,12 @@ export type Env = {
   SCRAPER_WORKER_URL?: string;
   /** Optional Bearer token for POST {SCRAPER_WORKER_URL}/run */
   SCRAPER_RUN_SECRET?: string;
+  /** Google OAuth Web client ID — verifies browser ID tokens. */
+  GOOGLE_CLIENT_ID?: string;
+  /** Allowed Workspace domain (e.g. aspadeco.com). */
+  ALLOWED_EMAIL_DOMAIN?: string;
+  /** When true, skip Google auth (local wrangler dev). */
+  AUTH_DISABLED?: string;
 };
 
 export type TicketSystem = 'digalert' | 'usan-ca' | 'usan-nv';

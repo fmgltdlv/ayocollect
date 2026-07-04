@@ -27,6 +27,8 @@ WORKER_URL = "https://811viewapi.ayowerks.com"
 # Dedicated scraper pushes batches to /api/ingest/* — keep Worker scraping off by default.
 ENABLE_WORKER_SCRAPING = "false"
 SCRAPER_WORKER_URL = "https://811scrape.ayowerks.com"
+GOOGLE_CLIENT_ID = "773088173323-5csuju63707n0ff3hk3barsko4mupqv2.apps.googleusercontent.com"
+ALLOWED_EMAIL_DOMAIN = "aspadeco.com"
 
 [[secrets_store_secrets]]
 binding = "INGEST_SECRET"

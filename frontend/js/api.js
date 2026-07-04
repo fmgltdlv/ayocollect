@@ -5,17 +5,34 @@ function apiBase() {
   return '/api';
 }
 
+let authTokenGetter = () => null;
+let onUnauthorized = () => {};
+
+export function setAuthTokenGetter(fn) {
+  authTokenGetter = fn;
+}
+
+export function setUnauthorizedHandler(fn) {
+  onUnauthorized = fn;
+}
+
 async function request(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const token = authTokenGetter();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   const res = await fetch(`${apiBase()}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers,
     ...options,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) onUnauthorized();
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
 
 export const api = {
+  me: () => request('/auth/me'),
   health: () => request('/health'),
   listTickets: (system, params) => {
     const q = new URLSearchParams(params).toString();

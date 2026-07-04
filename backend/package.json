@@ -9,7 +9,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply ayocollect-db --remote"
   },
   "dependencies": {
-    "hono": "^4.6.0"
+    "hono": "^4.6.0",
+    "jose": "^6.2.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241127.0",

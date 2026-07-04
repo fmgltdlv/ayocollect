@@ -1,8 +1,16 @@
 import { api, badgesHtml, bboxFromLayer, parseWktToLatLngs } from './api.js';
+import {
+  initAuth,
+  mountAuthHeader,
+  refreshAuthHeader,
+  renderGoogleButton,
+  setupGoogleButton,
+} from './auth.js';
 
 const app = document.getElementById('app');
 const stoppedBanner = document.getElementById('stopped-banner');
 const detailTab = document.getElementById('detail-tab');
+const authArea = document.getElementById('auth-area');
 
 const BROWSE_PAGE_SIZE = 30;
 
@@ -693,5 +701,45 @@ function render() {
   else if (state.view === 'detail' && state.detail) renderDetail();
 }
 
-refreshStopped();
-render();
+function renderSignIn(status) {
+  app.innerHTML = `
+    <section class="panel signin-panel">
+      <h2>Sign in required</h2>
+      <p>811 Ticket Analytics is restricted to @aspadeco.com accounts.</p>
+      ${status.error ? `<p class="error">${status.error}</p>` : ''}
+      <div id="signin-mount" class="signin-mount"></div>
+    </section>
+  `;
+  setupGoogleButton(authArea);
+  const mount = document.getElementById('signin-mount');
+  if (mount) {
+    renderGoogleButton(mount, { size: 'large' });
+  }
+}
+
+function handleAuthChange(status) {
+  refreshAuthHeader(authArea);
+  if (status.authenticated) {
+    refreshStopped();
+    render();
+    return;
+  }
+  renderSignIn(status);
+}
+
+function boot() {
+  mountAuthHeader(authArea, handleAuthChange);
+  initAuth((status) => {
+    if (status.authenticated) {
+      setupGoogleButton(authArea);
+      refreshAuthHeader(authArea);
+      refreshStopped();
+      render();
+      return;
+    }
+    renderSignIn(status);
+    setupGoogleButton(authArea);
+  });
+}
+
+boot();

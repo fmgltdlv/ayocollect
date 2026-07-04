@@ -1,3 +1,5 @@
+# Copy to .dev.vars for local wrangler dev.
 # INGEST_SECRET is bound from Cloudflare Secrets Store (see wrangler.toml).
 # Local wrangler dev: npx wrangler secrets-store secret create ce24acd5fbfa4bb09a002d09c3645dc0 --name INGEST_SECRET --scopes workers
 # ENABLE_WORKER_SCRAPING=true
+AUTH_DISABLED=true

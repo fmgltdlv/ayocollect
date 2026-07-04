@@ -31,20 +31,33 @@ import {
 } from './jobs/processor';
 import { buildJobProgress } from './lib/job-progress';
 import { getIngestSecret, workerScrapingEnabled } from './lib/ingest-auth';
+import { authDisabled, requireGoogleAuth } from './lib/google-auth';
 import { triggerDedicatedScraper } from './lib/scraper-proxy';
 import { createContainerJob, failContainerJob, finalizeStaleContainerJobs } from './lib/container-jobs';
 import { getAutoFetchSettings, isFetchStopped, setSetting } from './lib/settings';
 import { ingestRoutes } from './routes/ingest';
 
-type HonoEnv = { Bindings: Env; Variables: {} };
+type HonoEnv = { Bindings: Env; Variables: { userEmail: string } };
 
 const app = new Hono<HonoEnv>();
+
+const ALLOWED_ORIGINS = [
+  'https://811view.ayowerks.com',
+  'http://127.0.0.1:8788',
+  'http://localhost:8788',
+];
 
 function workerOrigin(c: { req: { url: string } }): string {
   return new URL(c.req.url).origin;
 }
 
-app.use('/api/*', cors());
+app.use(
+  '/api/*',
+  cors({
+    origin: ALLOWED_ORIGINS,
+    allowHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 
 app.route('/api/ingest', ingestRoutes);
 
@@ -66,8 +79,13 @@ app.get('/api/health', async (c) =>
     workerScraping: workerScrapingEnabled(c.env),
     dedicatedScraper: !!c.env.SCRAPER_WORKER_URL?.trim(),
     scraperWorkerUrl: c.env.SCRAPER_WORKER_URL?.trim() || null,
+    auth: authDisabled(c.env) ? 'disabled' : 'google',
   })
 );
+
+app.use('/api/*', requireGoogleAuth());
+
+app.get('/api/auth/me', (c) => c.json({ email: c.get('userEmail') }));
 
 app.get('/api/settings/auto-fetch', async (c) => {
   return c.json(await getAutoFetchSettings(c.env.DB));
