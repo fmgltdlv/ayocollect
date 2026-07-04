@@ -560,6 +560,48 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
   box-shadow: 0 0 0 2px rgba(15, 20, 25, 0.6);
 }
 
+.browse-cluster-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+.marker-cluster-small,
+.marker-cluster-medium,
+.marker-cluster-large {
+  background-color: transparent !important;
+}
+
+.marker-cluster-small div,
+.marker-cluster-medium div,
+.marker-cluster-large div {
+  background-color: transparent !important;
+}
+
+.browse-cluster {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.88);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.82rem;
+  border: 3px solid #fff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(15, 20, 25, 0.55);
+}
+
+.browse-cluster-md {
+  font-size: 0.92rem;
+  background: rgba(59, 130, 246, 0.92);
+}
+
+.browse-cluster-lg {
+  font-size: 1rem;
+  background: rgba(37, 99, 235, 0.95);
+}
+
 .admin-add-form {
   display: flex;
   flex-wrap: wrap;

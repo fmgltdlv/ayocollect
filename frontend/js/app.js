@@ -13,7 +13,8 @@ const detailTab = document.getElementById('detail-tab');
 const authArea = document.getElementById('auth-area');
 
 const BROWSE_PAGE_SIZE = 100;
-const BROWSE_POLYGON_MAX_ZOOM = 17;
+const BROWSE_ZOOM_CLUSTERS_UNTIL = 13;
+const BROWSE_ZOOM_POLYGONS_FROM = 17;
 
 let state = {
   view: 'browse',
@@ -31,7 +32,9 @@ let state = {
   detailMap: null,
   drawLayer: null,
   drawnGroup: null,
-  ticketLayerGroup: null,
+  ticketClusterGroup: null,
+  ticketPolygonGroup: null,
+  browseMapMode: null,
   browseMapTickets: [],
   jobsPollId: null,
 };
@@ -361,7 +364,7 @@ function renderBrowse() {
         </div>
       </div>
       <div class="map-section">
-        <p class="map-hint">Draw a rectangle to filter by area. Ticket shapes appear on the map; zoom in past level 17 to see pins.</p>
+        <p class="map-hint">Draw a rectangle to filter by area. Zoom out for clusters, mid zoom for pins, zoom in (17+) for ticket polygons.</p>
         <div id="search-map"></div>
       </div>
     </div>
@@ -382,7 +385,9 @@ function initSearchMap() {
     state.searchMap = null;
   }
   state.drawnGroup = null;
-  state.ticketLayerGroup = null;
+  state.ticketClusterGroup = null;
+  state.ticketPolygonGroup = null;
+  state.browseMapMode = null;
   state.drawLayer = null;
   state.browseMapTickets = [];
 
@@ -392,9 +397,15 @@ function initSearchMap() {
   }).addTo(state.searchMap);
 
   state.drawnGroup = new L.FeatureGroup();
-  state.ticketLayerGroup = new L.FeatureGroup();
+  state.ticketClusterGroup = L.markerClusterGroup({
+    maxClusterRadius: 56,
+    disableClusteringAtZoom: BROWSE_ZOOM_CLUSTERS_UNTIL,
+    showCoverageOnHover: false,
+    spiderfyOnMaxZoom: false,
+    iconCreateFunction: browseClusterIcon,
+  });
+  state.ticketPolygonGroup = L.featureGroup();
   state.searchMap.addLayer(state.drawnGroup);
-  state.searchMap.addLayer(state.ticketLayerGroup);
 
   state.searchMap.addControl(
     new L.Control.Draw({
@@ -448,7 +459,38 @@ function bindBrowseTicketLayer(layer, ticket, label) {
 }
 
 function browsePinSize(zoom) {
-  return Math.round(Math.min(58, Math.max(26, 78 - zoom * 1.35)));
+  if (zoom < BROWSE_ZOOM_CLUSTERS_UNTIL) {
+    return Math.round(Math.min(36, Math.max(22, 48 - zoom * 0.9)));
+  }
+  return Math.round(Math.min(52, Math.max(30, 68 - zoom * 1.1)));
+}
+
+function browseClusterIcon(cluster) {
+  const count = cluster.getChildCount();
+  let sizeClass = 'browse-cluster-sm';
+  if (count >= 25) sizeClass = 'browse-cluster-lg';
+  else if (count >= 10) sizeClass = 'browse-cluster-md';
+  return L.divIcon({
+    html: `<span class="browse-cluster ${sizeClass}">${count}</span>`,
+    className: 'browse-cluster-icon',
+    iconSize: L.point(44, 44),
+  });
+}
+
+function browseMapModeForZoom(zoom) {
+  return zoom >= BROWSE_ZOOM_POLYGONS_FROM ? 'polygons' : 'markers';
+}
+
+function setBrowseMapTicketLayer(mode) {
+  if (state.browseMapMode === mode) return;
+  if (state.ticketClusterGroup) state.searchMap.removeLayer(state.ticketClusterGroup);
+  if (state.ticketPolygonGroup) state.searchMap.removeLayer(state.ticketPolygonGroup);
+  state.browseMapMode = mode;
+  if (mode === 'polygons') {
+    state.searchMap.addLayer(state.ticketPolygonGroup);
+  } else {
+    state.searchMap.addLayer(state.ticketClusterGroup);
+  }
 }
 
 function createBrowseTicketPin(ticket, latlng, color, label, zoom) {
@@ -474,16 +516,15 @@ function createBrowseTicketPolygon(ticket, latlngs, color, label) {
   return poly;
 }
 
-function browseMapUsesPins() {
-  return state.searchMap.getZoom() > BROWSE_POLYGON_MAX_ZOOM;
-}
-
 function renderBrowseMapTickets(fitBounds = false) {
-  if (!state.searchMap || !state.ticketLayerGroup) return;
+  if (!state.searchMap || !state.ticketClusterGroup) return;
 
-  state.ticketLayerGroup.clearLayers();
-  const usePins = browseMapUsesPins();
   const zoom = state.searchMap.getZoom();
+  const mode = browseMapModeForZoom(zoom);
+  setBrowseMapTicketLayer(mode);
+
+  state.ticketClusterGroup.clearLayers();
+  state.ticketPolygonGroup.clearLayers();
   const boundsLayers = [];
 
   for (const t of state.browseMapTickets) {
@@ -491,18 +532,18 @@ function renderBrowseMapTickets(fitBounds = false) {
     const label = `${systemLabel(t.system)} — ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
     const latlngs = parseWktToLatLngs(t.polygon_wkt);
 
-    if (usePins || !latlngs.length) {
-      const center = ticketMapCenter(t, latlngs);
-      if (!center) continue;
-      const marker = createBrowseTicketPin(t, center, color, label, zoom);
-      state.ticketLayerGroup.addLayer(marker);
-      boundsLayers.push(marker);
+    if (mode === 'polygons' && latlngs.length) {
+      const poly = createBrowseTicketPolygon(t, latlngs, color, label);
+      state.ticketPolygonGroup.addLayer(poly);
+      boundsLayers.push(poly);
       continue;
     }
 
-    const poly = createBrowseTicketPolygon(t, latlngs, color, label);
-    state.ticketLayerGroup.addLayer(poly);
-    boundsLayers.push(poly);
+    const center = ticketMapCenter(t, latlngs);
+    if (!center) continue;
+    const marker = createBrowseTicketPin(t, center, color, label, zoom);
+    state.ticketClusterGroup.addLayer(marker);
+    boundsLayers.push(marker);
   }
 
   if (state.drawLayer) boundsLayers.push(state.drawLayer);
@@ -512,7 +553,7 @@ function renderBrowseMapTickets(fitBounds = false) {
     for (let i = 1; i < boundsLayers.length; i++) {
       combined.extend(boundsLayers[i].getBounds());
     }
-    state.searchMap.fitBounds(combined, { padding: [28, 28], maxZoom: 15 });
+    state.searchMap.fitBounds(combined, { padding: [28, 28], maxZoom: 12 });
   }
 }
 
