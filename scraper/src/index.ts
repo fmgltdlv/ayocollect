@@ -1,8 +1,23 @@
 import { Container, getContainer } from "@cloudflare/containers";
 
 export class ScraperContainer extends Container {
-  sleepAfter = "5m";
+  /** Idle shutdown when no scrape process is running (renewed while running). */
+  sleepAfter = "30m";
   enableInternet = true;
+
+  override onStart(): void {
+    this.renewActivityTimeout();
+  }
+
+  override async onActivityExpired(): Promise<void> {
+    if (this.container?.running) {
+      console.log("Scrape still running, renewing activity timeout");
+      this.renewActivityTimeout();
+      return;
+    }
+    console.log("Container idle, stopping");
+    await this.stop();
+  }
 }
 
 interface SecretsStoreBinding {
