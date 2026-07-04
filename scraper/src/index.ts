@@ -5,11 +5,15 @@ export class ScraperContainer extends Container {
   enableInternet = true;
 }
 
+interface SecretsStoreBinding {
+  get(): Promise<string>;
+}
+
 interface Env {
   SCRAPER: DurableObjectNamespace<ScraperContainer>;
   WORKER_URL: string;
   SYSTEMS: string;
-  INGEST_SECRET: string;
+  INGEST_SECRET: SecretsStoreBinding;
   SCRAPER_RUN_SECRET?: string;
 }
 
@@ -21,11 +25,15 @@ type RunBody = {
   digalertSessionCookies?: string;
 };
 
-function scrapeEnv(env: Env, overrides: Record<string, string> = {}): Record<string, string> {
+function scrapeEnv(
+  env: Env,
+  ingestSecret: string,
+  overrides: Record<string, string> = {},
+): Record<string, string> {
   return {
     SCRAPE_MODE: "yesterday",
     WORKER_URL: env.WORKER_URL,
-    INGEST_SECRET: env.INGEST_SECRET,
+    INGEST_SECRET: ingestSecret,
     DIGALERT_SESSION_COOKIES: "{}",
     SYSTEMS: env.SYSTEMS ?? "usan-ca,usan-nv",
     ...overrides,
@@ -46,11 +54,12 @@ function overridesFromBody(env: Env, body: RunBody): Record<string, string> {
 async function startScrape(env: Env, overrides: Record<string, string> = {}): Promise<Response> {
   const container = getContainer(env.SCRAPER);
   try {
-    if (!env.INGEST_SECRET?.trim()) {
+    const ingestSecret = (await env.INGEST_SECRET.get())?.trim();
+    if (!ingestSecret) {
       return Response.json({ error: "INGEST_SECRET not configured on scraper Worker" }, { status: 500 });
     }
     await container.start({
-      envVars: scrapeEnv(env, overrides),
+      envVars: scrapeEnv(env, ingestSecret, overrides),
       enableInternet: true,
     });
     return Response.json({ ok: true, message: "Scrape container started" });

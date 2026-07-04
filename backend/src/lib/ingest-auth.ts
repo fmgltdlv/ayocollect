@@ -3,11 +3,16 @@ import type { Env } from '../types';
 
 type IngestEnv = { Bindings: Env };
 
+export async function getIngestSecret(env: Env): Promise<string | null> {
+  const secret = (await env.INGEST_SECRET.get())?.trim();
+  return secret || null;
+}
+
 export function requireIngestSecret(): MiddlewareHandler<IngestEnv> {
   return async (c, next) => {
-    const secret = c.env.INGEST_SECRET?.trim();
+    const secret = await getIngestSecret(c.env);
     if (!secret) {
-      return c.json({ error: 'Ingest not configured — set INGEST_SECRET on the Worker' }, 503);
+      return c.json({ error: 'Ingest not configured — bind INGEST_SECRET from Secrets Store' }, 503);
     }
     const auth = c.req.header('Authorization') ?? '';
     if (auth !== `Bearer ${secret}`) {

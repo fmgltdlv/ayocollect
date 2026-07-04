@@ -30,7 +30,7 @@ import {
   stopAllJobs,
 } from './jobs/processor';
 import { buildJobProgress } from './lib/job-progress';
-import { workerScrapingEnabled } from './lib/ingest-auth';
+import { getIngestSecret, workerScrapingEnabled } from './lib/ingest-auth';
 import { triggerDedicatedScraper } from './lib/scraper-proxy';
 import { getAutoFetchSettings, isFetchStopped, setSetting } from './lib/settings';
 import { ingestRoutes } from './routes/ingest';
@@ -58,10 +58,10 @@ function scrapingDisabledResponse(c: { env: Env; json: (body: unknown, status?: 
   );
 }
 
-app.get('/api/health', (c) =>
+app.get('/api/health', async (c) =>
   c.json({
     ok: true,
-    ingest: !!c.env.INGEST_SECRET,
+    ingest: !!(await getIngestSecret(c.env)),
     workerScraping: workerScrapingEnabled(c.env),
     dedicatedScraper: !!c.env.SCRAPER_WORKER_URL?.trim(),
     scraperWorkerUrl: c.env.SCRAPER_WORKER_URL?.trim() || null,

@@ -22,3 +22,8 @@ class_name = "ScraperContainer"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ScraperContainer"]
+
+[[secrets_store_secrets]]
+binding = "INGEST_SECRET"
+store_id = "ce24acd5fbfa4bb09a002d09c3645dc0"
+secret_name = "INGEST_SECRET"

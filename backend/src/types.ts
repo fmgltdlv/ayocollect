@@ -1,8 +1,13 @@
+/** Cloudflare Secrets Store binding — call `get()` to read the secret value. */
+export type SecretsStoreBinding = {
+  get(): Promise<string>;
+};
+
 export type Env = {
   DB: D1Database;
   DIGALERT_SESSION_COOKIES?: string;
-  /** Bearer token for POST /api/ingest/* (scraper → Worker). Set via Worker secret. */
-  INGEST_SECRET?: string;
+  /** Bearer token for POST /api/ingest/* (scraper → Worker). Secrets Store binding. */
+  INGEST_SECRET: SecretsStoreBinding;
   /** When false, Worker does not run batch jobs, cron scrape, or outbound 811 fetches. */
   ENABLE_WORKER_SCRAPING?: string;
   /** Public Worker URL for self-fetch job chaining (legacy; only if ENABLE_WORKER_SCRAPING). */

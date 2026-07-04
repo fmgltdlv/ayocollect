@@ -24,4 +24,8 @@ WORKER_URL = "https://ayocollect.thefieldmappinggroup.workers.dev"
 # Dedicated scraper pushes batches to /api/ingest/* — keep Worker scraping off by default.
 ENABLE_WORKER_SCRAPING = "false"
 SCRAPER_WORKER_URL = "https://ayocollect-scraper.thefieldmappinggroup.workers.dev"
-# INGEST_SECRET — set via: npx wrangler secret put INGEST_SECRET
+
+[[secrets_store_secrets]]
+binding = "INGEST_SECRET"
+store_id = "ce24acd5fbfa4bb09a002d09c3645dc0"
+secret_name = "INGEST_SECRET"
