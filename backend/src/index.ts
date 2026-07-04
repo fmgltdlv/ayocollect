@@ -109,7 +109,6 @@ app.post('/api/jobs', async (c) => {
     systems: string[];
     startDate: string;
     endDate: string;
-    digalertSessionCookies?: string;
   }>();
   if (!body.systems?.length || !body.startDate || !body.endDate) {
     return c.json({ error: 'systems, startDate, endDate required' }, 400);
@@ -256,7 +255,7 @@ app.post('/api/digalert/fetch', async (c) => {
   const blocked = scrapingDisabledResponse(c);
   if (blocked) return blocked;
   const body = await c.req.json<{ ticket: string; revision?: string }>();
-  const payload = await fetchDigAlertRaw(body.ticket, body.revision ?? '00A', c.env);
+  const payload = await fetchDigAlertRaw(body.ticket, body.revision ?? '00A');
   if (!payload) return c.json({ error: 'Fetch failed' }, 502);
   const id = await upsertDigAlert(c.env.DB, payload);
   const detail = await getDigAlertDetail(c.env.DB, body.ticket, body.revision ?? '00A');

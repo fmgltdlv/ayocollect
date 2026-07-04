@@ -367,7 +367,7 @@ async function processDigAlertWave(
     slots.map(async (s, i) => {
       if (signal.aborted) return;
       try {
-        const payload = await fetchDigAlertRaw(s.ticket, '00A', env, signal);
+        const payload = await fetchDigAlertRaw(s.ticket, '00A', signal);
         if (!payload) return;
         existsResults[i] = true;
         await upsertDigAlert(db, payload);

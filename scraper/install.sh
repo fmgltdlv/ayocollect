@@ -22,7 +22,7 @@ pip install -r requirements.txt
 if [[ ! -f .env ]]; then
   cp .env.example .env
   echo ""
-  echo "Created .env from .env.example — edit INGEST_SECRET and DIGALERT_SESSION_COOKIES before running."
+  echo "Created .env from .env.example — edit INGEST_SECRET before running."
 fi
 
 echo ""

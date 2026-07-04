@@ -136,8 +136,6 @@ def scan_digalert(
     log: LogFn | None = None,
 ) -> ScanStats:
     emit = log or logger.info
-    if not settings.digalert_cookies:
-        emit("WARNING: DIGALERT_SESSION_COOKIES empty — DigAlert may return no tickets")
 
     buf = BatchBuffer(settings, "digalert", start_date, emit)
     current = start_date
@@ -155,7 +153,7 @@ def scan_digalert(
             buf.stats.checked += 1
             day_checked += 1
 
-            envelope = fetch_digalert_raw(ticket, "00A", settings.digalert_cookies)
+            envelope = fetch_digalert_raw(ticket, "00A")
             if envelope:
                 misses = 0
                 buf.add(envelope)

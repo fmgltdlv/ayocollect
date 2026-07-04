@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +25,6 @@ class Settings:
     max_tickets_per_day: int
     consecutive_miss_limit: int
     systems: list[str]
-    digalert_cookies: dict[str, str]
     api_host: str
     api_port: int
     api_key: str | None
@@ -41,16 +39,6 @@ def load_settings() -> Settings:
     raw_systems = os.getenv("SYSTEMS", "digalert,usan-ca,usan-nv")
     systems = [s.strip() for s in raw_systems.split(",") if s.strip()]
 
-    cookies_raw = os.getenv("DIGALERT_SESSION_COOKIES", "").strip()
-    digalert_cookies: dict[str, str] = {}
-    if cookies_raw:
-        try:
-            parsed = json.loads(cookies_raw)
-            if isinstance(parsed, dict):
-                digalert_cookies = {str(k): str(v) for k, v in parsed.items()}
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid DIGALERT_SESSION_COOKIES JSON: {e}") from e
-
     return Settings(
         worker_url=worker_url,
         ingest_secret=ingest_secret,
@@ -59,7 +47,6 @@ def load_settings() -> Settings:
         max_tickets_per_day=int(os.getenv("MAX_TICKETS_PER_DAY", "3999")),
         consecutive_miss_limit=int(os.getenv("CONSECUTIVE_MISS_LIMIT", "2")),
         systems=systems,
-        digalert_cookies=digalert_cookies,
         api_host=os.getenv("SCRAPER_API_HOST", "0.0.0.0"),
         api_port=int(os.getenv("SCRAPER_API_PORT", "8789")),
         api_key=os.getenv("SCRAPER_API_KEY") or None,

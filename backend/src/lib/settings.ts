@@ -1,5 +1,3 @@
-import type { Env } from '../types';
-
 export async function getSetting(db: D1Database, key: string): Promise<string | null> {
   const row = await db
     .prepare('SELECT value FROM app_settings WHERE key = ?')
@@ -41,16 +39,4 @@ export async function getAutoFetchSettings(db: D1Database) {
     out[k] = (await getSetting(db, k)) ?? '';
   }
   return out;
-}
-
-export function digAlertCookieHeader(env: Env): string | undefined {
-  if (!env.DIGALERT_SESSION_COOKIES) return undefined;
-  try {
-    const cookies = JSON.parse(env.DIGALERT_SESSION_COOKIES) as Record<string, string>;
-    return Object.entries(cookies)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('; ');
-  } catch {
-    return undefined;
-  }
 }

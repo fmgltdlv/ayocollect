@@ -1,7 +1,5 @@
 import { USER_AGENT } from '../types';
 import { parseQmFormat, coordsToWkt, scrapeUsanPolygonWkt } from '../lib/polygon';
-import { digAlertCookieHeader } from '../lib/settings';
-import type { Env } from '../types';
 
 const HEADERS = { 'User-Agent': USER_AGENT };
 
@@ -66,21 +64,30 @@ function digAlertHasTicketData(data: Record<string, unknown>): boolean {
 export async function fetchDigAlertRaw(
   ticket: string,
   revision = '00A',
-  env?: Env,
   signal?: AbortSignal
 ): Promise<DigAlertPayload | null> {
-  const cookie = env ? digAlertCookieHeader(env) : undefined;
   const headers: Record<string, string> = { ...HEADERS };
-  if (cookie) headers.Cookie = cookie;
 
+  const eprUrls = [
+    `https://newtinb.digalert.org/direct/getElectronicPositiveResponse.vjs?ticket=${encodeURIComponent(ticket)}`,
+    `https://newtin.digalert.org/direct/getElectronicPositiveResponse.vjs?ticket=${encodeURIComponent(ticket)}`,
+  ];
   const ticketUrls = [
     `https://newtinb.digalert.org/direct/getTicket.vjs?ticket=${encodeURIComponent(ticket)}&revision=${encodeURIComponent(revision)}`,
     `https://newtinb.digalert.org/direct/getTicket.vjs?t=${encodeURIComponent(ticket)}&r=${encodeURIComponent(revision)}`,
   ];
-  const eprUrls = [
-    `https://newtin.digalert.org/direct/getElectronicPositiveResponse.vjs?ticket=${encodeURIComponent(ticket)}`,
-    `https://newtinb.digalert.org/direct/getElectronicPositiveResponse.vjs?ticket=${encodeURIComponent(ticket)}`,
-  ];
+
+  for (const eprUrl of eprUrls) {
+    try {
+      const epr = (await fetchJson(eprUrl, { headers, signal })) as DigAlertPayload;
+      const data = epr?.data as Record<string, unknown> | undefined;
+      if (data && digAlertHasTicketData(data)) {
+        return finalizeDigAlertEnvelope(epr, ticket, revision);
+      }
+    } catch {
+      continue;
+    }
+  }
 
   let ticketJson: Record<string, unknown> | null = null;
   for (const ticketUrl of ticketUrls) {
@@ -123,6 +130,15 @@ export async function fetchDigAlertRaw(
     }
   }
 
+  return finalizeDigAlertEnvelope(envelope, ticket, revision);
+}
+
+function finalizeDigAlertEnvelope(
+  envelope: DigAlertPayload,
+  ticket: string,
+  revision: string
+): DigAlertPayload {
+  const data = envelope.data as Record<string, unknown>;
   data.ticket = (data.ticket as string) ?? ticket;
   data.revision = data.revision ?? revision;
 
@@ -174,11 +190,7 @@ export async function ticketExistsUsan(system: 'ca' | 'nv', ticket: string, sign
   return !!data?.posrTicket;
 }
 
-export async function ticketExistsDigAlert(
-  ticket: string,
-  env?: Env,
-  signal?: AbortSignal
-): Promise<boolean> {
-  const payload = await fetchDigAlertRaw(ticket, '00A', env, signal);
+export async function ticketExistsDigAlert(ticket: string, signal?: AbortSignal): Promise<boolean> {
+  const payload = await fetchDigAlertRaw(ticket, '00A', signal);
   return !!payload?.data?.ticket;
 }

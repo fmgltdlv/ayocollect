@@ -275,16 +275,11 @@ function renderFetch() {
     </div>
     <div class="panel">
       <h2>Batch scrape (container)</h2>
-      <p class="muted">Starts the dedicated scraper container. Tickets appear in Browse as batches are ingested. DigAlert needs fresh session cookies each run.</p>
+      <p class="muted">Starts the dedicated scraper container. Tickets appear in Browse as batches are ingested.</p>
       <div class="row checks">
         <label><input type="checkbox" id="job-da" /> Dig Alert</label>
         <label><input type="checkbox" id="job-ca" checked /> USAN CA</label>
         <label><input type="checkbox" id="job-nv" checked /> USAN NV</label>
-      </div>
-      <div id="job-da-cookies-wrap" class="row hidden">
-        <label style="flex:1">DigAlert session cookies (JSON, this run only)
-          <textarea id="job-da-cookies" rows="3" placeholder='{"JSESSIONID":"paste-from-browser"}' style="width:100%;font-family:monospace"></textarea>
-        </label>
       </div>
       <div class="row">
         <label>Start <input type="date" id="job-start" /></label>
@@ -301,14 +296,6 @@ function renderFetch() {
   };
   sysSel.addEventListener('change', toggleRev);
   toggleRev();
-
-  const jobDa = document.getElementById('job-da');
-  const jobDaCookiesWrap = document.getElementById('job-da-cookies-wrap');
-  const toggleDaCookies = () => {
-    jobDaCookiesWrap.classList.toggle('hidden', !jobDa.checked);
-  };
-  jobDa.addEventListener('change', toggleDaCookies);
-  toggleDaCookies();
 
   document.getElementById('fetch-one-btn').addEventListener('click', async () => {
     const system = sysSel.value;
@@ -339,15 +326,9 @@ function renderFetch() {
       out.textContent = 'Select systems and date range.';
       return;
     }
-    const digalertSessionCookies = document.getElementById('job-da-cookies').value.trim();
-    if (systems.includes('digalert') && !digalertSessionCookies) {
-      out.textContent = 'Dig Alert selected — paste session cookies JSON (DevTools → Application → Cookies).';
-      return;
-    }
     out.textContent = 'Starting…';
     try {
       const payload = { systems, startDate, endDate };
-      if (digalertSessionCookies) payload.digalertSessionCookies = digalertSessionCookies;
       const res = await api.createJob(payload);
       out.textContent = res.dedicatedScraper
         ? (res.message ||

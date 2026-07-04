@@ -22,7 +22,6 @@ type RunBody = {
   end?: string;
   mode?: string;
   systems?: string[];
-  digalertSessionCookies?: string;
 };
 
 function scrapeEnv(
@@ -34,19 +33,15 @@ function scrapeEnv(
     SCRAPE_MODE: "yesterday",
     WORKER_URL: env.WORKER_URL,
     INGEST_SECRET: ingestSecret,
-    DIGALERT_SESSION_COOKIES: "{}",
-    SYSTEMS: env.SYSTEMS ?? "usan-ca,usan-nv",
+    SYSTEMS: env.SYSTEMS ?? "digalert,usan-ca,usan-nv",
     ...overrides,
   };
 }
 
-function overridesFromBody(env: Env, body: RunBody): Record<string, string> {
+function overridesFromBody(body: RunBody): Record<string, string> {
   const overrides: Record<string, string> = {};
   if (body.systems?.length) {
     overrides.SYSTEMS = body.systems.join(",");
-  }
-  if (body.digalertSessionCookies?.trim()) {
-    overrides.DIGALERT_SESSION_COOKIES = body.digalertSessionCookies.trim();
   }
   return overrides;
 }
@@ -93,17 +88,7 @@ export default {
         return new Response("Invalid JSON body", { status: 400 });
       }
 
-      if (
-        body.systems?.includes("digalert") &&
-        !body.digalertSessionCookies?.trim()
-      ) {
-        return Response.json(
-          { error: "digalertSessionCookies required when digalert is in systems" },
-          { status: 400 },
-        );
-      }
-
-      const shared = overridesFromBody(env, body);
+      const shared = overridesFromBody(body);
 
       if (body.mode === "yesterday" || !body.start) {
         return startScrape(env, shared);
@@ -123,7 +108,6 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env) {
-    // Cron has no DigAlert session — USAN only
-    await startScrape(env, { SYSTEMS: "usan-ca,usan-nv" });
+    await startScrape(env);
   },
 };

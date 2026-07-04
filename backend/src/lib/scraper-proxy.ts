@@ -4,8 +4,6 @@ export type ScrapeTriggerBody = {
   startDate: string;
   endDate: string;
   systems: string[];
-  /** JSON cookie object — only for this container run (not stored). */
-  digalertSessionCookies?: string;
 };
 
 export async function triggerDedicatedScraper(
@@ -19,10 +17,6 @@ export async function triggerDedicatedScraper(
     );
   }
 
-  if (body.systems.includes('digalert') && !body.digalertSessionCookies?.trim()) {
-    throw new Error('DigAlert selected — paste your session cookies JSON for this run.');
-  }
-
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (env.SCRAPER_RUN_SECRET) {
     headers.Authorization = `Bearer ${env.SCRAPER_RUN_SECRET}`;
@@ -33,9 +27,6 @@ export async function triggerDedicatedScraper(
     end: body.endDate,
     systems: body.systems,
   };
-  if (body.digalertSessionCookies?.trim()) {
-    payload.digalertSessionCookies = body.digalertSessionCookies.trim();
-  }
 
   const resp = await fetch(`${base}/run`, {
     method: 'POST',

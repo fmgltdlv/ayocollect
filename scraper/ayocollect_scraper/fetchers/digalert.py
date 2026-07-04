@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 import requests
@@ -11,13 +10,13 @@ from ..polygon import parse_qm_format, coords_to_wkt
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 TIMEOUT = 15
 
+EPR_URLS = [
+    "https://newtinb.digalert.org/direct/getElectronicPositiveResponse.vjs?ticket={ticket}",
+    "https://newtin.digalert.org/direct/getElectronicPositiveResponse.vjs?ticket={ticket}",
+]
 TICKET_URLS = [
     "https://newtinb.digalert.org/direct/getTicket.vjs?ticket={ticket}&revision={revision}",
     "https://newtinb.digalert.org/direct/getTicket.vjs?t={ticket}&r={revision}",
-]
-EPR_URLS = [
-    "https://newtin.digalert.org/direct/getElectronicPositiveResponse.vjs?ticket={ticket}",
-    "https://newtinb.digalert.org/direct/getElectronicPositiveResponse.vjs?ticket={ticket}",
 ]
 
 
@@ -32,18 +31,51 @@ def _digalert_has_ticket_data(data: dict[str, Any]) -> bool:
     )
 
 
+def _finalize_envelope(
+    envelope: dict[str, Any],
+    ticket: str,
+    revision: str,
+) -> dict[str, Any]:
+    data = envelope["data"]
+    if not isinstance(data, dict):
+        return envelope
+
+    data["ticket"] = data.get("ticket") or ticket
+    data["revision"] = data.get("revision") or revision
+
+    qm = data.get("work_area_shape")
+    if qm and not data.get("polygon_wkt"):
+        coords = parse_qm_format(str(qm))
+        if coords:
+            data["polygon_wkt"] = coords_to_wkt(coords)
+
+    return envelope
+
+
 def fetch_digalert_raw(
     ticket: str,
     revision: str = "00A",
-    cookies: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
-    cookies = cookies or {}
-    ticket_json: dict[str, Any] | None = None
+    for url_tpl in EPR_URLS:
+        url = url_tpl.format(ticket=ticket)
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+            resp.raise_for_status()
+            body = resp.json()
+            if (
+                isinstance(body, dict)
+                and isinstance(body.get("data"), dict)
+                and _digalert_has_ticket_data(body["data"])
+            ):
+                return _finalize_envelope(body, ticket, revision)
+        except (requests.RequestException, json.JSONDecodeError):
+            continue
 
+    ticket_json: dict[str, Any] | None = None
     for url_tpl in TICKET_URLS:
         url = url_tpl.format(ticket=ticket, revision=revision)
         try:
-            resp = requests.get(url, headers=HEADERS, cookies=cookies, timeout=TIMEOUT)
+            resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
             resp.raise_for_status()
             body = resp.json()
             if isinstance(body, dict) and body.get("err"):
@@ -69,14 +101,15 @@ def fetch_digalert_raw(
         for url_tpl in EPR_URLS:
             url = url_tpl.format(ticket=ticket)
             try:
-                resp = requests.get(url, headers=HEADERS, cookies=cookies, timeout=TIMEOUT)
+                resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
                 resp.raise_for_status()
                 epr = resp.json()
-                if epr and isinstance(epr, dict) and epr.get("data"):
-                    if epr["data"].get("responses"):
-                        data["responses"] = epr["data"]["responses"]
-                    if epr["data"].get("revisions"):
-                        data["revisions"] = epr["data"]["revisions"]
+                if epr and isinstance(epr, dict) and isinstance(epr.get("data"), dict):
+                    epr_data = epr["data"]
+                    if epr_data.get("responses"):
+                        data["responses"] = epr_data["responses"]
+                    if epr_data.get("revisions"):
+                        data["revisions"] = epr_data["revisions"]
                     if epr.get("status"):
                         envelope["status"] = epr["status"]
                     if epr.get("message"):
@@ -87,17 +120,8 @@ def fetch_digalert_raw(
             except (requests.RequestException, json.JSONDecodeError):
                 continue
 
-    data["ticket"] = data.get("ticket") or ticket
-    data["revision"] = data.get("revision") or revision
-
-    qm = data.get("work_area_shape")
-    if qm and not data.get("polygon_wkt"):
-        coords = parse_qm_format(str(qm))
-        if coords:
-            data["polygon_wkt"] = coords_to_wkt(coords)
-
-    return envelope
+    return _finalize_envelope(envelope, ticket, revision)
 
 
-def ticket_exists_digalert(ticket: str, cookies: dict[str, str] | None = None) -> bool:
-    return fetch_digalert_raw(ticket, "00A", cookies) is not None
+def ticket_exists_digalert(ticket: str) -> bool:
+    return fetch_digalert_raw(ticket, "00A") is not None
