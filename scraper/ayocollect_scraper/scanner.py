@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -174,6 +176,34 @@ def scan_digalert(
     return buf.stats
 
 
+def _thread_safe_log(base: LogFn) -> LogFn:
+    lock = threading.Lock()
+
+    def emit(message: str) -> None:
+        with lock:
+            base(message)
+
+    return emit
+
+
+def _scan_system_task(
+    settings: Settings,
+    system_key: str,
+    start_date: str,
+    end_date: str,
+    log: LogFn,
+) -> tuple[str, ScanStats]:
+    if system_key == "digalert":
+        stats = scan_digalert(settings, start_date, end_date, log)
+    elif system_key == "usan-ca":
+        stats = scan_usan_system(settings, "usan-ca", "ca", start_date, end_date, log)
+    elif system_key == "usan-nv":
+        stats = scan_usan_system(settings, "usan-nv", "nv", start_date, end_date, log)
+    else:
+        raise ValueError(f"Unknown system {system_key}")
+    return system_key, stats
+
+
 def run_scan(
     settings: Settings,
     start_date: str,
@@ -185,23 +215,28 @@ def run_scan(
     selected = systems or settings.systems
     result = ScanResult(start_date=start_date, end_date=end_date)
 
-    emit(f"Scan {start_date} → {end_date} systems={','.join(selected)}")
+    emit(f"Scan {start_date} → {end_date} systems={','.join(selected)} (parallel)")
     emit(f"Worker: {settings.worker_url}")
 
-    if "digalert" in selected:
-        result.systems["digalert"] = scan_digalert(settings, start_date, end_date, emit)
+    parallel_log = _thread_safe_log(emit)
+    with ThreadPoolExecutor(max_workers=len(selected)) as pool:
+        futures = [
+            pool.submit(
+                _scan_system_task,
+                settings,
+                system_key,
+                start_date,
+                end_date,
+                parallel_log,
+            )
+            for system_key in selected
+        ]
+        for future in as_completed(futures):
+            system_key, stats = future.result()
+            result.systems[system_key] = stats
 
-    if "usan-ca" in selected:
-        result.systems["usan-ca"] = scan_usan_system(
-            settings, "usan-ca", "ca", start_date, end_date, emit
-        )
-
-    if "usan-nv" in selected:
-        result.systems["usan-nv"] = scan_usan_system(
-            settings, "usan-nv", "nv", start_date, end_date, emit
-        )
-
-    for sys, stats in result.systems.items():
+    for sys in selected:
+        stats = result.systems[sys]
         emit(
             f"Done {sys}: checked={stats.checked} fetched={stats.fetched} "
             f"batches={stats.batches_sent} ingest_errors={stats.ingest_errors}"
