@@ -330,42 +330,46 @@ function renderBrowse() {
   app.innerHTML = `
     <div class="panel browse-panel">
       <h2 class="panel-heading">Browse tickets</h2>
-      <div class="browse-filters">
-        <div class="filter-group">
-          <span class="filter-label">Systems</span>
-          <div class="chip-group">
-            <label class="chip-check"><input type="checkbox" id="browse-da" ${state.browseSystems.includes('digalert') ? 'checked' : ''} /><span>Dig Alert</span></label>
-            <label class="chip-check"><input type="checkbox" id="browse-ca" ${state.browseSystems.includes('usan-ca') ? 'checked' : ''} /><span>USAN CA</span></label>
-            <label class="chip-check"><input type="checkbox" id="browse-nv" ${state.browseSystems.includes('usan-nv') ? 'checked' : ''} /><span>USAN NV</span></label>
+      <div class="browse-toolbar">
+        <div class="browse-filters">
+          <div class="filter-group">
+            <span class="filter-label">Systems</span>
+            <div class="chip-group">
+              <label class="chip-check"><input type="checkbox" id="browse-da" ${state.browseSystems.includes('digalert') ? 'checked' : ''} /><span>Dig Alert</span></label>
+              <label class="chip-check"><input type="checkbox" id="browse-ca" ${state.browseSystems.includes('usan-ca') ? 'checked' : ''} /><span>USAN CA</span></label>
+              <label class="chip-check"><input type="checkbox" id="browse-nv" ${state.browseSystems.includes('usan-nv') ? 'checked' : ''} /><span>USAN NV</span></label>
+            </div>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Date range</span>
+            <div class="date-range">
+              <label class="field-inline"><span>From</span><input type="date" id="start-date" value="${startDate}" /></label>
+              <span class="date-sep" aria-hidden="true">–</span>
+              <label class="field-inline"><span>To</span><input type="date" id="end-date" value="${endDate}" /></label>
+            </div>
+          </div>
+          <div class="filter-row">
+            <div class="filter-group filter-group-grow">
+              <span class="filter-label">Ticket #</span>
+              <input type="text" id="ticket-filter" class="filter-input" placeholder="Optional" value="${ticketNumber}" />
+            </div>
+            <div class="filter-actions-inline">
+              <button class="btn" id="search-btn" type="button">Search</button>
+            </div>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Badges</span>
+            <div class="chip-group">
+              <label class="chip-check chip-badge"><input type="checkbox" id="browse-badge-pending" ${state.browseBadges.includes('pending') ? 'checked' : ''} /><span class="badge badge-pending">Pending</span></label>
+              <label class="chip-check chip-badge"><input type="checkbox" id="browse-badge-blocker" ${state.browseBadges.includes('blocker') ? 'checked' : ''} /><span class="badge badge-blocker">Blocker</span></label>
+              <label class="chip-check chip-badge"><input type="checkbox" id="browse-badge-late" ${state.browseBadges.includes('late') ? 'checked' : ''} /><span class="badge badge-late">Late</span></label>
+            </div>
           </div>
         </div>
-        <div class="filter-group">
-          <span class="filter-label">Badges</span>
-          <div class="chip-group">
-            <label class="chip-check chip-badge"><input type="checkbox" id="browse-badge-pending" ${state.browseBadges.includes('pending') ? 'checked' : ''} /><span class="badge badge-pending">Pending</span></label>
-            <label class="chip-check chip-badge"><input type="checkbox" id="browse-badge-blocker" ${state.browseBadges.includes('blocker') ? 'checked' : ''} /><span class="badge badge-blocker">Blocker</span></label>
-            <label class="chip-check chip-badge"><input type="checkbox" id="browse-badge-late" ${state.browseBadges.includes('late') ? 'checked' : ''} /><span class="badge badge-late">Late</span></label>
-          </div>
+        <div class="map-section">
+          <p class="map-hint">Draw a rectangle to filter by area. Zoom out for clusters, mid zoom for pins, zoom in (17+) for ticket polygons.</p>
+          <div id="search-map"></div>
         </div>
-        <div class="filter-group filter-group-wide">
-          <span class="filter-label">Date range</span>
-          <div class="date-range">
-            <label class="field-inline"><span>From</span><input type="date" id="start-date" value="${startDate}" /></label>
-            <span class="date-sep" aria-hidden="true">–</span>
-            <label class="field-inline"><span>To</span><input type="date" id="end-date" value="${endDate}" /></label>
-          </div>
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">Ticket #</span>
-          <input type="text" id="ticket-filter" class="filter-input" placeholder="Optional" value="${ticketNumber}" />
-        </div>
-        <div class="filter-actions">
-          <button class="btn" id="search-btn" type="button">Search</button>
-        </div>
-      </div>
-      <div class="map-section">
-        <p class="map-hint">Draw a rectangle to filter by area. Zoom out for clusters, mid zoom for pins, zoom in (17+) for ticket polygons.</p>
-        <div id="search-map"></div>
       </div>
     </div>
     <div class="panel"><div id="results">Loading…</div></div>
@@ -374,6 +378,7 @@ function renderBrowse() {
   setTimeout(() => {
     initSearchMap();
     runBrowseSearch(0);
+    state.searchMap?.invalidateSize();
   }, 0);
 
   document.getElementById('search-btn').addEventListener('click', () => runBrowseSearch(0));
