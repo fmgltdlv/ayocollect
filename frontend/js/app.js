@@ -238,6 +238,103 @@ function ticketInfoHtml(system, ticket) {
   return html || '<p class="muted">No ticket details available.</p>';
 }
 
+function formatHistoryDate(value) {
+  if (value === null || value === undefined || value === '') {
+    return '<span class="muted">—</span>';
+  }
+  const d = new Date(String(value));
+  if (!Number.isNaN(d.getTime())) {
+    return escapeHtml(d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }));
+  }
+  return escapeHtml(String(value));
+}
+
+function historyCell(value) {
+  if (value === null || value === undefined || value === '') {
+    return '<span class="muted">—</span>';
+  }
+  return escapeHtml(String(value));
+}
+
+function normalizeHistoryRow(system, row) {
+  if (system === 'digalert') {
+    return {
+      date: row.responded_at,
+      request: '',
+      utility: row.utility_code,
+      name: row.utility_name,
+      response: row.response_code,
+      description: row.response_description,
+      notes: row.comments,
+      by: row.response_by,
+    };
+  }
+  return {
+    date: row.response_date ?? row.response_date_string,
+    request: row.request_number ?? row.requestNumber ?? row.revision_suffix,
+    utility: row.code,
+    name: row.name,
+    response: row.response_code,
+    description: row.response_description,
+    notes: row.comment,
+    by: '',
+  };
+}
+
+function ticketHistoryTableHtml(system, history) {
+  if (!history.length) {
+    return '<p class="muted">No history recorded.</p>';
+  }
+
+  const rows = history
+    .map((row) => normalizeHistoryRow(system, row))
+    .sort((a, b) => {
+      const ta = a.date ? new Date(String(a.date)).getTime() : NaN;
+      const tb = b.date ? new Date(String(b.date)).getTime() : NaN;
+      if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+      if (Number.isNaN(ta)) return 1;
+      if (Number.isNaN(tb)) return -1;
+      return ta - tb;
+    });
+
+  const isDigAlert = system === 'digalert';
+  const head = isDigAlert
+    ? '<tr><th>Date</th><th>Utility</th><th>Name</th><th>Resp</th><th>Description</th><th>By</th><th>Notes</th></tr>'
+    : '<tr><th>Date</th><th>Request</th><th>Utility</th><th>Name</th><th>Resp</th><th>Description</th><th>Notes</th></tr>';
+
+  const body = rows
+    .map((r) => {
+      if (isDigAlert) {
+        return `<tr>
+          <td>${formatHistoryDate(r.date)}</td>
+          <td class="mono">${historyCell(r.utility)}</td>
+          <td>${historyCell(r.name)}</td>
+          <td class="mono">${historyCell(r.response)}</td>
+          <td>${historyCell(r.description)}</td>
+          <td>${historyCell(r.by)}</td>
+          <td>${historyCell(r.notes)}</td>
+        </tr>`;
+      }
+      return `<tr>
+        <td>${formatHistoryDate(r.date)}</td>
+        <td class="mono">${historyCell(r.request)}</td>
+        <td class="mono">${historyCell(r.utility)}</td>
+        <td>${historyCell(r.name)}</td>
+        <td class="mono">${historyCell(r.response)}</td>
+        <td>${historyCell(r.description)}</td>
+        <td>${historyCell(r.notes)}</td>
+      </tr>`;
+    })
+    .join('');
+
+  return `<div class="history-table-wrap">
+    <table class="history-table">
+      <thead>${head}</thead>
+      <tbody>${body}</tbody>
+    </table>
+  </div>`;
+}
+
 function browseSystemsFromDom() {
   const systems = [];
   if (document.getElementById('browse-da')?.checked) systems.push('digalert');
@@ -1493,7 +1590,7 @@ function renderDetail() {
           </tbody>
         </table>
         <details><summary>History (${history.length})</summary>
-          <pre class="mono history-pre">${JSON.stringify(history.slice(0, 20), null, 2)}</pre>
+          ${ticketHistoryTableHtml(system, history)}
         </details>
       </div>
       <div class="panel detail-panel-inline">

@@ -378,9 +378,14 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
   font-size: 0.85rem;
 }
 
-.history-pre {
-  max-height: 200px;
+.history-table-wrap {
+  max-height: 240px;
   overflow: auto;
+  margin-top: 0.5rem;
+}
+
+.history-table {
+  width: 100%;
 }
 
 .detail-modal #detail-map {
