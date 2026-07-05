@@ -1,4 +1,5 @@
 import { getJob, type FetchJobRow } from '../jobs/processor';
+import { compareDates } from './ticket-sequence';
 import { setFetchStopped } from './settings';
 
 export type ContainerSystemState = {
@@ -26,6 +27,16 @@ export function isContainerJob(job: FetchJobRow): boolean {
 
 export function emptyContainerState(): ContainerSystemState {
   return { batches: 0, lastBatchAt: null, done: false, scanDate: null };
+}
+
+/** Whether a container system still has date range left to scan (ignores stale done flags). */
+export function containerSystemNeedsResume(
+  state: ContainerSystemState,
+  startDate: string,
+  endDate: string
+): boolean {
+  const scanDate = state.scanDate ?? startDate;
+  return compareDates(scanDate, endDate) < 0;
 }
 
 export function parseContainerState(raw: string | null): ContainerSystemState {
@@ -157,20 +168,22 @@ export async function completeContainerJob(
   const job = await getJob(db, jobId);
   if (!job || !isContainerJob(job) || !['running', 'paused'].includes(job.status)) return;
 
-  const updates: Record<string, string> = {};
-  for (const system of ['digalert', 'usan-ca', 'usan-nv'] as const) {
-    if (!job[includeField(system)]) continue;
-    const state = parseContainerState(job[cursorField(system)] as string | null);
-    state.done = true;
-    updates[cursorField(system)] = JSON.stringify(state);
-  }
-
   const ingestErrors = Object.values(body.systems ?? {}).reduce(
     (sum, s) => sum + (s.ingest_errors ?? 0),
     0
   );
   const failed = body.ok === false || ingestErrors > 0;
   const status = failed ? 'failed' : 'completed';
+
+  const updates: Record<string, string> = {};
+  for (const system of ['digalert', 'usan-ca', 'usan-nv'] as const) {
+    if (!job[includeField(system)]) continue;
+    const state = parseContainerState(job[cursorField(system)] as string | null);
+    if (!failed) {
+      state.done = true;
+      updates[cursorField(system)] = JSON.stringify(state);
+    }
+  }
   const lastError =
     body.lastError ??
     (ingestErrors > 0 ? `Scraper finished with ${ingestErrors} ingest error(s)` : null);

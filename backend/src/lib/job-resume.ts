@@ -1,10 +1,12 @@
 import { continueJobUntilDone, getJob, type FetchJobRow } from '../jobs/processor';
 import type { Env } from '../types';
 import {
+  containerSystemNeedsResume,
   failContainerJob,
   isContainerJob,
   parseContainerState,
   type ContainerJobSystem,
+  type ContainerSystemState,
 } from './container-jobs';
 import { compareDates } from './ticket-sequence';
 import { setFetchStopped } from './settings';
@@ -26,6 +28,15 @@ function systemsFromJob(job: FetchJobRow): ContainerJobSystem[] {
   return systems;
 }
 
+function prepareSystemForResume(
+  state: ContainerSystemState,
+  startDate: string
+): { state: ContainerSystemState; resumeFrom: string } {
+  state.done = false;
+  const resumeFrom = state.scanDate ?? startDate;
+  return { state, resumeFrom };
+}
+
 async function resumeContainerJob(
   db: D1Database,
   job: FetchJobRow,
@@ -37,28 +48,29 @@ async function resumeContainerJob(
 
   for (const system of systemsFromJob(job)) {
     const state = parseContainerState(job[cursorField(system)] as string | null);
-    if (state.done) continue;
+    if (!containerSystemNeedsResume(state, job.start_date, job.end_date)) continue;
 
+    const { state: nextState, resumeFrom } = prepareSystemForResume(state, job.start_date);
     systemsToRun.push(system);
-    const scanDate = state.scanDate ?? job.start_date;
-    if (resumeStart === null || compareDates(scanDate, resumeStart) < 0) {
-      resumeStart = scanDate;
+    cursorUpdates[cursorField(system)] = JSON.stringify(nextState);
+    if (resumeStart === null || compareDates(resumeFrom, resumeStart) < 0) {
+      resumeStart = resumeFrom;
     }
+  }
 
-    state.done = false;
-    cursorUpdates[cursorField(system)] = JSON.stringify(state);
+  // Failed jobs may have stale done flags after a full scan (e.g. ingest errors) — retry all systems.
+  if (!systemsToRun.length && job.status === 'failed') {
+    for (const system of systemsFromJob(job)) {
+      const state = parseContainerState(job[cursorField(system)] as string | null);
+      const { state: nextState } = prepareSystemForResume(state, job.start_date);
+      systemsToRun.push(system);
+      cursorUpdates[cursorField(system)] = JSON.stringify(nextState);
+    }
+    resumeStart = job.start_date;
   }
 
   if (!systemsToRun.length) {
-    await db
-      .prepare(
-        "UPDATE fetch_jobs SET status = 'completed', updated_at = datetime('now') WHERE id = ?"
-      )
-      .bind(job.id)
-      .run();
-    const completed = await getJob(db, job.id);
-    if (!completed) throw new Error('Job not found after completion');
-    return { job: completed, resumeStart: job.start_date, systems: [] };
+    throw new Error('No remaining work to resume for this job');
   }
 
   const startDate = resumeStart ?? job.start_date;
@@ -115,9 +127,6 @@ export async function resumeJob(
 
   if (isContainerJob(job)) {
     const result = await resumeContainerJob(db, job, env);
-    if (!result.systems.length) {
-      return { job: result.job };
-    }
     return {
       job: result.job,
       container: { resumeStart: result.resumeStart, systems: result.systems },
