@@ -1,10 +1,13 @@
 import type { Env } from '../types';
 
+import type { ContainerResumeCursor } from './container-jobs';
+
 export type ScrapeTriggerBody = {
   startDate: string;
   endDate: string;
   systems: string[];
   jobId?: number;
+  resumeCursors?: Partial<Record<'digalert' | 'usan-ca' | 'usan-nv', ContainerResumeCursor>>;
 };
 
 export async function triggerDedicatedScraper(
@@ -36,6 +39,9 @@ export async function triggerDedicatedScraper(
     systems: body.systems,
   };
   if (body.jobId != null) payload.jobId = body.jobId;
+  if (body.resumeCursors && Object.keys(body.resumeCursors).length) {
+    payload.resumeCursors = body.resumeCursors;
+  }
 
   const runUrl = `${base}/run`;
   const resp = await fetch(runUrl, {

@@ -48,6 +48,43 @@ export function compareDates(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
+export function parseUsanTicketLabel(ticket: string): { date: string; seq: number } | null {
+  const m = ticket.match(/^(\d{4})(\d{2})(\d{2})(\d{5})-000$/);
+  if (!m) return null;
+  return { date: `${m[1]}-${m[2]}-${m[3]}`, seq: Number(m[4]) };
+}
+
+export function parseDigAlertTicketLabel(ticket: string): { date: string; counter: number } | null {
+  const m = ticket.match(/^A(\d{2})(\d{3})0(\d+)$/);
+  if (!m) return null;
+  const year = 2000 + Number(m[1]);
+  const jdd = Number(m[2]);
+  const counter = Number(m[3]);
+  const d = new Date(Date.UTC(year, 0, jdd));
+  if (Number.isNaN(d.getTime())) return null;
+  return { date: d.toISOString().slice(0, 10), counter };
+}
+
+export function advanceUsanAfterSuccess(date: string, seq: number): UsanCursor {
+  let nextSeq = seq + 1;
+  let nextDate = date;
+  if (nextSeq > MAX_TICKETS_PER_DAY) {
+    nextDate = addDays(date, 1);
+    nextSeq = 1;
+  }
+  return { date: nextDate, seq: nextSeq, consecutiveMisses: 0 };
+}
+
+export function advanceDigAlertAfterSuccess(date: string, counter: number): DigAlertCursor {
+  let nextCounter = counter + 1;
+  let nextDate = date;
+  if (nextCounter > MAX_TICKETS_PER_DAY) {
+    nextDate = addDays(date, 1);
+    nextCounter = 1;
+  }
+  return { date: nextDate, counter: nextCounter, consecutiveMisses: 0 };
+}
+
 export function nextUsanCandidates(cursor: UsanCursor, endDate: string, count: number): {
   tickets: string[];
   cursor: UsanCursor;

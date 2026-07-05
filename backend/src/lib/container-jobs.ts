@@ -1,4 +1,11 @@
 import { getJob, type FetchJobRow } from '../jobs/processor';
+import {
+  advanceDigAlertAfterSuccess,
+  advanceUsanAfterSuccess,
+  compareDates,
+  parseDigAlertTicketLabel,
+  parseUsanTicketLabel,
+} from './ticket-sequence';
 import { setFetchStopped } from './settings';
 
 export type ContainerSystemState = {
@@ -6,6 +13,18 @@ export type ContainerSystemState = {
   lastBatchAt: string | null;
   done: boolean;
   scanDate: string | null;
+  /** Ticket-level resume position (next ticket to try after last successful ingest). */
+  date?: string | null;
+  seq?: number | null;
+  counter?: number | null;
+  consecutiveMisses?: number;
+  lastTicket?: string | null;
+};
+
+export type ContainerResumeCursor = {
+  date: string;
+  seq?: number;
+  counter?: number;
 };
 
 export type ContainerJobSystem = 'digalert' | 'usan-ca' | 'usan-nv';
@@ -25,7 +44,66 @@ export function isContainerJob(job: FetchJobRow): boolean {
 }
 
 export function emptyContainerState(): ContainerSystemState {
-  return { batches: 0, lastBatchAt: null, done: false, scanDate: null };
+  return {
+    batches: 0,
+    lastBatchAt: null,
+    done: false,
+    scanDate: null,
+    date: null,
+    seq: null,
+    counter: null,
+    consecutiveMisses: 0,
+    lastTicket: null,
+  };
+}
+
+/** Whether a container system still has date range left to scan. */
+export function containerSystemNeedsResume(
+  state: ContainerSystemState,
+  startDate: string,
+  endDate: string
+): boolean {
+  if (state.done) return false;
+  const cursorDate = state.date ?? state.scanDate ?? startDate;
+  return compareDates(cursorDate, endDate) <= 0;
+}
+
+export function containerResumeCursor(
+  state: ContainerSystemState,
+  system: ContainerJobSystem,
+  startDate: string
+): ContainerResumeCursor | null {
+  if (state.done) return null;
+  const date = state.date ?? state.scanDate ?? startDate;
+  if (system === 'digalert') {
+    return { date, counter: state.counter ?? 1 };
+  }
+  return { date, seq: state.seq ?? 1 };
+}
+
+function applyLastAcceptedTicket(
+  state: ContainerSystemState,
+  system: ContainerJobSystem,
+  ticket: string
+): void {
+  state.lastTicket = ticket;
+  if (system === 'digalert') {
+    const parsed = parseDigAlertTicketLabel(ticket);
+    if (!parsed) return;
+    const next = advanceDigAlertAfterSuccess(parsed.date, parsed.counter);
+    state.date = next.date;
+    state.counter = next.counter;
+    state.scanDate = parsed.date;
+    state.consecutiveMisses = 0;
+    return;
+  }
+  const parsed = parseUsanTicketLabel(ticket);
+  if (!parsed) return;
+  const next = advanceUsanAfterSuccess(parsed.date, parsed.seq);
+  state.date = next.date;
+  state.seq = next.seq;
+  state.scanDate = parsed.date;
+  state.consecutiveMisses = 0;
 }
 
 export function parseContainerState(raw: string | null): ContainerSystemState {
@@ -38,6 +116,11 @@ export function parseContainerState(raw: string | null): ContainerSystemState {
         lastBatchAt: o.lastBatchAt ?? null,
         done: !!o.done,
         scanDate: o.scanDate ?? null,
+        date: o.date ?? null,
+        seq: typeof o.seq === 'number' ? o.seq : null,
+        counter: typeof o.counter === 'number' ? o.counter : null,
+        consecutiveMisses: typeof o.consecutiveMisses === 'number' ? o.consecutiveMisses : 0,
+        lastTicket: o.lastTicket ?? null,
       };
     }
   } catch {
@@ -113,7 +196,8 @@ export async function recordContainerBatch(
   system: ContainerJobSystem,
   accepted: number,
   failed: number,
-  batchId: string
+  batchId: string,
+  lastAcceptedTicket?: string | null
 ): Promise<void> {
   const job = await getJob(db, jobId);
   if (!job || !isContainerJob(job) || job.status !== 'running') return;
@@ -124,7 +208,11 @@ export async function recordContainerBatch(
   const state = parseContainerState(job[cursorKey] as string | null);
   state.batches += 1;
   state.lastBatchAt = new Date().toISOString();
-  state.scanDate = scanDateFromBatchId(batchId, job.start_date);
+  if (lastAcceptedTicket) {
+    applyLastAcceptedTicket(state, system, lastAcceptedTicket);
+  } else {
+    state.scanDate = scanDateFromBatchId(batchId, job.start_date);
+  }
 
   const fetched = Number(job[fetchedKey]) + accepted;
   const errorCount = Number(job.error_count) + failed;
@@ -157,20 +245,22 @@ export async function completeContainerJob(
   const job = await getJob(db, jobId);
   if (!job || !isContainerJob(job) || !['running', 'paused'].includes(job.status)) return;
 
-  const updates: Record<string, string> = {};
-  for (const system of ['digalert', 'usan-ca', 'usan-nv'] as const) {
-    if (!job[includeField(system)]) continue;
-    const state = parseContainerState(job[cursorField(system)] as string | null);
-    state.done = true;
-    updates[cursorField(system)] = JSON.stringify(state);
-  }
-
   const ingestErrors = Object.values(body.systems ?? {}).reduce(
     (sum, s) => sum + (s.ingest_errors ?? 0),
     0
   );
   const failed = body.ok === false || ingestErrors > 0;
   const status = failed ? 'failed' : 'completed';
+
+  const updates: Record<string, string> = {};
+  for (const system of ['digalert', 'usan-ca', 'usan-nv'] as const) {
+    if (!job[includeField(system)]) continue;
+    const state = parseContainerState(job[cursorField(system)] as string | null);
+    if (!failed) {
+      state.done = true;
+      updates[cursorField(system)] = JSON.stringify(state);
+    }
+  }
   const lastError =
     body.lastError ??
     (ingestErrors > 0 ? `Scraper finished with ${ingestErrors} ingest error(s)` : null);

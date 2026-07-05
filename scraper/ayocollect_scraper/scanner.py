@@ -35,21 +35,26 @@ class ScanResult:
     systems: dict[str, ScanStats] = field(default_factory=dict)
 
 
+ResumeCursor = dict[str, int | str]
+
+
 class BatchBuffer:
     def __init__(
         self,
         settings: Settings,
         system: str,
-        start_date: str,
         log: LogFn,
     ):
         self.settings = settings
         self.system = system
-        self.start_date = start_date
         self.log = log
         self.items: list[Any] = []
         self.batch_num = 0
         self.stats = ScanStats(system=system)
+        self.current_day = ""
+
+    def set_day(self, day: str) -> None:
+        self.current_day = day
 
     def add(self, item: Any) -> None:
         self.items.append(item)
@@ -61,7 +66,7 @@ class BatchBuffer:
         if not self.items:
             return
         self.batch_num += 1
-        batch_id = f"{self.start_date}-{self.system}-{self.batch_num}"
+        batch_id = f"{self.current_day or 'unknown'}-{self.system}-{self.batch_num}"
         try:
             result = post_batch(
                 self.settings.worker_url,
@@ -93,13 +98,23 @@ def scan_usan_system(
     start_date: str,
     end_date: str,
     log: LogFn | None = None,
+    resume: ResumeCursor | None = None,
 ) -> ScanStats:
     emit = log or logger.info
-    buf = BatchBuffer(settings, system_key, start_date, emit)
+    buf = BatchBuffer(settings, system_key, emit)
     current = start_date
+    resume_pending = resume is not None
 
     while compare_dates(current, end_date) <= 0:
-        seq = 1
+        if resume_pending and resume:
+            current = str(resume.get("date", current))
+            seq = int(resume.get("seq", 1))
+            resume_pending = False
+            if compare_dates(current, end_date) > 0:
+                break
+        else:
+            seq = 1
+        buf.set_day(current)
         misses = 0
         day_checked = 0
 
@@ -137,14 +152,24 @@ def scan_digalert(
     start_date: str,
     end_date: str,
     log: LogFn | None = None,
+    resume: ResumeCursor | None = None,
 ) -> ScanStats:
     emit = log or logger.info
 
-    buf = BatchBuffer(settings, "digalert", start_date, emit)
+    buf = BatchBuffer(settings, "digalert", emit)
     current = start_date
+    resume_pending = resume is not None
 
     while compare_dates(current, end_date) <= 0:
-        counter = 1
+        if resume_pending and resume:
+            current = str(resume.get("date", current))
+            counter = int(resume.get("counter", 1))
+            resume_pending = False
+            if compare_dates(current, end_date) > 0:
+                break
+        else:
+            counter = 1
+        buf.set_day(current)
         misses = 0
         day_checked = 0
 
@@ -192,13 +217,14 @@ def _scan_system_task(
     start_date: str,
     end_date: str,
     log: LogFn,
+    resume: ResumeCursor | None = None,
 ) -> tuple[str, ScanStats]:
     if system_key == "digalert":
-        stats = scan_digalert(settings, start_date, end_date, log)
+        stats = scan_digalert(settings, start_date, end_date, log, resume=resume)
     elif system_key == "usan-ca":
-        stats = scan_usan_system(settings, "usan-ca", "ca", start_date, end_date, log)
+        stats = scan_usan_system(settings, "usan-ca", "ca", start_date, end_date, log, resume=resume)
     elif system_key == "usan-nv":
-        stats = scan_usan_system(settings, "usan-nv", "nv", start_date, end_date, log)
+        stats = scan_usan_system(settings, "usan-nv", "nv", start_date, end_date, log, resume=resume)
     else:
         raise ValueError(f"Unknown system {system_key}")
     return system_key, stats
@@ -210,12 +236,15 @@ def run_scan(
     end_date: str,
     systems: list[str] | None = None,
     log: LogFn | None = None,
+    resume_cursors: dict[str, ResumeCursor] | None = None,
 ) -> ScanResult:
     emit = log or logger.info
     selected = systems or settings.systems
     result = ScanResult(start_date=start_date, end_date=end_date)
 
     emit(f"Scan {start_date} → {end_date} systems={','.join(selected)} (parallel)")
+    if resume_cursors:
+        emit(f"Resume cursors: {resume_cursors}")
     emit(f"Worker: {settings.worker_url}")
 
     parallel_log = _thread_safe_log(emit)
@@ -228,6 +257,7 @@ def run_scan(
                 start_date,
                 end_date,
                 parallel_log,
+                (resume_cursors or {}).get(system_key),
             )
             for system_key in selected
         ]

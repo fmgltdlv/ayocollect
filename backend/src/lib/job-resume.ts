@@ -1,10 +1,14 @@
 import { continueJobUntilDone, getJob, type FetchJobRow } from '../jobs/processor';
 import type { Env } from '../types';
 import {
+  containerResumeCursor,
+  containerSystemNeedsResume,
   failContainerJob,
   isContainerJob,
   parseContainerState,
   type ContainerJobSystem,
+  type ContainerResumeCursor,
+  type ContainerSystemState,
 } from './container-jobs';
 import { compareDates } from './ticket-sequence';
 import { setFetchStopped } from './settings';
@@ -26,39 +30,64 @@ function systemsFromJob(job: FetchJobRow): ContainerJobSystem[] {
   return systems;
 }
 
+function prepareSystemForResume(
+  state: ContainerSystemState,
+  system: ContainerJobSystem,
+  startDate: string
+): { state: ContainerSystemState; resumeCursor: ContainerResumeCursor } {
+  state.done = false;
+  const resumeCursor = containerResumeCursor(state, system, startDate) ?? {
+    date: startDate,
+    ...(system === 'digalert' ? { counter: 1 } : { seq: 1 }),
+  };
+  return { state, resumeCursor };
+}
+
 async function resumeContainerJob(
   db: D1Database,
   job: FetchJobRow,
   env: Env
 ): Promise<{ job: FetchJobRow; resumeStart: string; systems: string[] }> {
   const systemsToRun: string[] = [];
+  const resumeCursors: Partial<Record<ContainerJobSystem, ContainerResumeCursor>> = {};
   let resumeStart: string | null = null;
   const cursorUpdates: Partial<Record<keyof FetchJobRow, string>> = {};
 
   for (const system of systemsFromJob(job)) {
     const state = parseContainerState(job[cursorField(system)] as string | null);
-    if (state.done) continue;
+    if (!containerSystemNeedsResume(state, job.start_date, job.end_date)) continue;
 
+    const { state: nextState, resumeCursor } = prepareSystemForResume(state, system, job.start_date);
     systemsToRun.push(system);
-    const scanDate = state.scanDate ?? job.start_date;
-    if (resumeStart === null || compareDates(scanDate, resumeStart) < 0) {
-      resumeStart = scanDate;
+    resumeCursors[system] = resumeCursor;
+    cursorUpdates[cursorField(system)] = JSON.stringify(nextState);
+    if (resumeStart === null || compareDates(resumeCursor.date, resumeStart) < 0) {
+      resumeStart = resumeCursor.date;
     }
+  }
 
-    state.done = false;
-    cursorUpdates[cursorField(system)] = JSON.stringify(state);
+  // Failed jobs may have stale done flags after a full scan (e.g. ingest errors) — retry from job start.
+  if (!systemsToRun.length && job.status === 'failed') {
+    for (const system of systemsFromJob(job)) {
+      const state = parseContainerState(job[cursorField(system)] as string | null);
+      state.done = false;
+      state.date = job.start_date;
+      state.seq = system === 'digalert' ? null : 1;
+      state.counter = system === 'digalert' ? 1 : null;
+      state.scanDate = null;
+      state.consecutiveMisses = 0;
+      systemsToRun.push(system);
+      cursorUpdates[cursorField(system)] = JSON.stringify(state);
+      resumeCursors[system] =
+        system === 'digalert'
+          ? { date: job.start_date, counter: 1 }
+          : { date: job.start_date, seq: 1 };
+    }
+    resumeStart = job.start_date;
   }
 
   if (!systemsToRun.length) {
-    await db
-      .prepare(
-        "UPDATE fetch_jobs SET status = 'completed', updated_at = datetime('now') WHERE id = ?"
-      )
-      .bind(job.id)
-      .run();
-    const completed = await getJob(db, job.id);
-    if (!completed) throw new Error('Job not found after completion');
-    return { job: completed, resumeStart: job.start_date, systems: [] };
+    throw new Error('No remaining work to resume for this job');
   }
 
   const startDate = resumeStart ?? job.start_date;
@@ -88,6 +117,7 @@ async function resumeContainerJob(
       endDate: job.end_date,
       systems: systemsToRun,
       jobId: job.id,
+      resumeCursors,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -115,9 +145,6 @@ export async function resumeJob(
 
   if (isContainerJob(job)) {
     const result = await resumeContainerJob(db, job, env);
-    if (!result.systems.length) {
-      return { job: result.job };
-    }
     return {
       job: result.job,
       container: { resumeStart: result.resumeStart, systems: result.systems },
