@@ -55,6 +55,7 @@ export const api = {
   getJob: (id) => request(`/jobs/${id}`),
   tickJob: (id) => request(`/jobs/${id}/tick`, { method: 'POST' }),
   cancelJob: (id) => request(`/jobs/${id}/cancel`, { method: 'POST' }),
+  resumeJob: (id) => request(`/jobs/${id}/resume`, { method: 'POST' }),
   stopAll: () => request('/jobs/stop-all', { method: 'POST' }),
   getSettings: () => request('/settings/auto-fetch'),
   putSettings: (body) =>
@@ -88,6 +89,15 @@ export const api = {
   getOverlapSettings: () => request('/admin/settings/overlaps'),
   putOverlapSettings: (body) =>
     request('/admin/settings/overlaps', { method: 'PUT', body: JSON.stringify(body) }),
+  submitFeedback: (body) =>
+    request('/feedback', { method: 'POST', body: JSON.stringify(body) }),
+  listFeedback: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/admin/feedback${q ? `?${q}` : ''}`);
+  },
+  feedbackUnreadCount: () => request('/admin/feedback/unread-count'),
+  markFeedbackRead: (id) =>
+    request(`/admin/feedback/${id}/read`, { method: 'POST' }),
 };
 
 export function badgesHtml(badges) {

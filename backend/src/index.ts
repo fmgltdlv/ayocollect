@@ -48,6 +48,13 @@ import { triggerDedicatedScraper } from './lib/scraper-proxy';
 import { createContainerJob, failContainerJob, finalizeStaleContainerJobs } from './lib/container-jobs';
 import { getAutoFetchSettings, getSetting, isFetchStopped, setSetting } from './lib/settings';
 import { ingestRoutes } from './routes/ingest';
+import {
+  countUnreadFeedback,
+  listFeedback,
+  markFeedbackRead,
+  submitFeedback,
+} from './lib/feedback';
+import { resumeJob } from './lib/job-resume';
 
 type HonoEnv = { Bindings: Env; Variables: { userEmail: string; isAdmin: boolean } };
 
@@ -164,6 +171,40 @@ app.put('/api/admin/settings/overlaps', adminOnly, async (c) => {
   return c.json({ crossSystem, pruneEnabled });
 });
 
+app.post('/api/feedback', async (c) => {
+  const email = c.get('userEmail');
+  if (!email) return c.json({ error: 'Sign in required' }, 401);
+
+  const body = await c.req.json<{ message?: string; pageUrl?: string }>();
+  try {
+    const feedback = await submitFeedback(c.env.DB, email, body.message ?? '', body.pageUrl);
+    return c.json({ feedback }, 201);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ error: msg }, 400);
+  }
+});
+
+app.get('/api/admin/feedback', adminOnly, async (c) => {
+  const limit = Math.min(Number(c.req.query('limit') ?? 50), 100);
+  const feedback = await listFeedback(c.env.DB, limit);
+  const unreadCount = await countUnreadFeedback(c.env.DB);
+  return c.json({ feedback, unreadCount });
+});
+
+app.get('/api/admin/feedback/unread-count', adminOnly, async (c) => {
+  const unreadCount = await countUnreadFeedback(c.env.DB);
+  return c.json({ unreadCount });
+});
+
+app.post('/api/admin/feedback/:id/read', adminOnly, async (c) => {
+  const id = Number(c.req.param('id'));
+  const feedback = await markFeedbackRead(c.env.DB, id, c.get('userEmail'));
+  if (!feedback) return c.json({ error: 'Not found' }, 404);
+  const unreadCount = await countUnreadFeedback(c.env.DB);
+  return c.json({ feedback, unreadCount });
+});
+
 app.get('/api/settings/auto-fetch', adminOnly, async (c) => {
   return c.json(await getAutoFetchSettings(c.env.DB));
 });
@@ -263,10 +304,20 @@ app.post('/api/jobs/:id/pause', adminOnly, async (c) => {
 
 app.post('/api/jobs/:id/resume', adminOnly, async (c) => {
   const id = Number(c.req.param('id'));
-  await c.env.DB.prepare("UPDATE fetch_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").bind(id).run();
-  c.executionCtx.waitUntil(continueJobUntilDone(c.env.DB, id, c.env, c.executionCtx, workerOrigin(c)));
-  const job = await getJob(c.env.DB, id);
-  return c.json({ job, continued: true });
+  try {
+    const result = await resumeJob(
+      c.env.DB,
+      id,
+      c.env,
+      c.executionCtx,
+      workerOrigin(c)
+    );
+    return c.json({ ...result, resumed: true, fetchStopped: await isFetchStopped(c.env.DB) });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const status = msg === 'Job not found' ? 404 : 400;
+    return c.json({ error: msg }, status);
+  }
 });
 
 function parseBadges(q: (k: string) => string | undefined) {

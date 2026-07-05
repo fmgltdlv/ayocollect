@@ -10,6 +10,7 @@ import {
 const app = document.getElementById('app');
 const stoppedBanner = document.getElementById('stopped-banner');
 const authArea = document.getElementById('auth-area');
+const feedbackBtn = document.getElementById('feedback-btn');
 
 const BROWSE_PAGE_SIZE = 100;
 const BROWSE_ZOOM_CLUSTERS_UNTIL = 13;
@@ -39,6 +40,8 @@ let state = {
   browsePolygonByKey: {},
   browsePolygonLoading: false,
   jobsPollId: null,
+  feedbackUnread: 0,
+  feedbackPollId: null,
 };
 
 const ADMIN_VIEWS = new Set(['fetch', 'jobs', 'admin']);
@@ -47,6 +50,111 @@ function updateAdminTabs(isAdmin) {
   document.querySelectorAll('.admin-tab').forEach((tab) => {
     tab.classList.toggle('hidden', !isAdmin);
   });
+  updateAdminTabBadge();
+}
+
+function updateAdminTabBadge() {
+  const adminTab = document.querySelector('.tab[data-view="admin"]');
+  if (!adminTab) return;
+  let badge = adminTab.querySelector('.tab-badge');
+  if (state.isAdmin && state.feedbackUnread > 0) {
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'tab-badge';
+      adminTab.appendChild(badge);
+    }
+    badge.textContent = String(state.feedbackUnread);
+    badge.title = `${state.feedbackUnread} unread feedback item(s)`;
+  } else if (badge) {
+    badge.remove();
+  }
+}
+
+function updateFeedbackButton(authenticated) {
+  if (!feedbackBtn) return;
+  feedbackBtn.classList.toggle('hidden', !authenticated);
+}
+
+async function refreshFeedbackUnread() {
+  if (!state.isAdmin) {
+    state.feedbackUnread = 0;
+    updateAdminTabBadge();
+    return;
+  }
+  try {
+    const { unreadCount } = await api.feedbackUnreadCount();
+    state.feedbackUnread = unreadCount ?? 0;
+    updateAdminTabBadge();
+    const badge = document.getElementById('admin-feedback-unread');
+    if (badge) {
+      badge.textContent =
+        state.feedbackUnread > 0 ? `${state.feedbackUnread} unread` : 'No unread feedback';
+      badge.classList.toggle('badge-blocker', state.feedbackUnread > 0);
+      badge.classList.toggle('badge-ok', state.feedbackUnread === 0);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function syncFeedbackPoll() {
+  if (state.isAdmin && !state.feedbackPollId) {
+    state.feedbackPollId = setInterval(refreshFeedbackUnread, 60_000);
+  } else if (!state.isAdmin && state.feedbackPollId) {
+    clearInterval(state.feedbackPollId);
+    state.feedbackPollId = null;
+  }
+}
+
+function showFeedbackModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal feedback-modal">
+      <h2>Send feedback</h2>
+      <p class="muted">Report a bug, request a feature, or share other thoughts with the admin team.</p>
+      <form id="feedback-form">
+        <label>Message
+          <textarea id="feedback-message" rows="5" required maxlength="4000" placeholder="What can we improve?"></textarea>
+        </label>
+        <p id="feedback-form-msg" class="muted"></p>
+        <div class="btn-row">
+          <button class="btn" type="submit">Send</button>
+          <button class="btn-secondary close-feedback" type="button">Cancel</button>
+        </div>
+      </form>
+    </div>`;
+  document.body.appendChild(backdrop);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+  backdrop.querySelector('.close-feedback').addEventListener('click', () => backdrop.remove());
+  backdrop.querySelector('#feedback-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msgEl = backdrop.querySelector('#feedback-form-msg');
+    const textarea = backdrop.querySelector('#feedback-message');
+    const submitBtn = backdrop.querySelector('button[type="submit"]');
+    const message = textarea.value.trim();
+    if (!message) return;
+    submitBtn.disabled = true;
+    msgEl.textContent = 'Sending…';
+    try {
+      await api.submitFeedback({
+        message,
+        pageUrl: `${window.location.pathname}#${state.view}`,
+      });
+      backdrop.remove();
+      alert('Thanks — your feedback was sent to the admin team.');
+    } catch (err) {
+      msgEl.textContent = err.message;
+      submitBtn.disabled = false;
+    }
+  });
+  backdrop.querySelector('#feedback-message').focus();
+}
+
+if (feedbackBtn) {
+  feedbackBtn.addEventListener('click', showFeedbackModal);
 }
 
 function setView(view) {
@@ -1033,11 +1141,26 @@ function jobStatusLabel(job, progress) {
   return `running (${progress.systemsComplete}/${progress.systemsActive} systems done)`;
 }
 
+function jobCanResume(job) {
+  return ['paused', 'failed', 'cancelled'].includes(job.status);
+}
+
 function bindJobsTableEvents(el) {
-  el.querySelectorAll('.tick-btn').forEach((btn) => {
+  el.querySelectorAll('.resume-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      await api.tickJob(btn.dataset.id);
-      refreshJobsList();
+      const id = btn.dataset.id;
+      const label = btn.dataset.status === 'cancelled' ? 'Resume cancelled' : 'Resume';
+      if (!confirm(`${label} job #${id}?`)) return;
+      btn.disabled = true;
+      btn.textContent = 'Resuming…';
+      try {
+        await api.resumeJob(id);
+        refreshJobsList();
+      } catch (e) {
+        alert(e.message);
+        btn.disabled = false;
+        btn.textContent = 'Resume';
+      }
     });
   });
   el.querySelectorAll('.stop-btn').forEach((btn) => {
@@ -1079,7 +1202,7 @@ function renderJobsTable(jobs) {
             <td>
               <div class="btn-row">
                 <button class="btn-secondary progress-btn" data-id="${j.id}" type="button">Progress</button>
-                ${j.status === 'paused' ? `<button class="btn tick-btn" data-id="${j.id}" type="button">Continue</button>` : ''}
+                ${jobCanResume(j) ? `<button class="btn resume-btn" data-id="${j.id}" data-status="${j.status}" type="button">Resume</button>` : ''}
                 ${['running', 'paused', 'pending'].includes(j.status) ? `<button class="btn-danger stop-btn" data-id="${j.id}" type="button">Stop</button>` : ''}
               </div>
             </td>
@@ -1229,19 +1352,26 @@ async function showJobProgress(jobId) {
       ${systemBlock('USAN CA', p.systems.usanCa, p.status)}
       ${systemBlock('USAN NV', p.systems.usanNv, p.status)}
       <div class="btn-row" style="margin-top:1rem">
-        ${job.status === 'paused' && job.triggered_by !== 'container' ? `<button class="btn tick-btn-modal" type="button">Continue job</button>` : ''}
+        ${jobCanResume(job) ? `<button class="btn resume-btn-modal" type="button">Resume job</button>` : ''}
         ${['running', 'paused', 'pending'].includes(job.status) ? `<button class="btn-danger stop-btn-modal" type="button">Stop job</button>` : ''}
         <button class="btn-secondary close-modal" type="button">Close</button>
       </div>`;
     backdrop.querySelector('.close-modal').addEventListener('click', () => backdrop.remove());
-    const tickBtn = backdrop.querySelector('.tick-btn-modal');
-    if (tickBtn) {
-      tickBtn.addEventListener('click', async () => {
-        tickBtn.disabled = true;
-        tickBtn.textContent = 'Continuing…';
-        await api.tickJob(jobId);
-        backdrop.remove();
-        refreshJobsList();
+    const resumeBtn = backdrop.querySelector('.resume-btn-modal');
+    if (resumeBtn) {
+      resumeBtn.addEventListener('click', async () => {
+        if (!confirm(`Resume job #${jobId}?`)) return;
+        resumeBtn.disabled = true;
+        resumeBtn.textContent = 'Resuming…';
+        try {
+          await api.resumeJob(jobId);
+          backdrop.remove();
+          refreshJobsList();
+        } catch (e) {
+          alert(e.message);
+          resumeBtn.disabled = false;
+          resumeBtn.textContent = 'Resume job';
+        }
       });
     }
     const stopBtn = backdrop.querySelector('.stop-btn-modal');
@@ -1653,6 +1783,12 @@ function renderDetail() {
 async function renderAdmin() {
   app.innerHTML = `
     <div class="panel">
+      <h2>User feedback</h2>
+      <p class="muted">Messages submitted via the Feedback button in the header.</p>
+      <p id="admin-feedback-unread" class="badge badge-ok">Loading…</p>
+      <div id="feedback-list">Loading…</div>
+    </div>
+    <div class="panel">
       <h2>Admin users</h2>
       <p class="muted">Only explicitly granted admins can use Fetch and Jobs. Signing in with @aspadeco.com does not grant admin access.</p>
       <div id="admin-list">Loading…</div>
@@ -1678,6 +1814,66 @@ async function renderAdmin() {
       <p id="overlap-settings-msg" class="muted"></p>
     </div>
   `;
+
+  async function refreshFeedbackList() {
+    const el = document.getElementById('feedback-list');
+    if (!el) return;
+    try {
+      const { feedback, unreadCount } = await api.listFeedback();
+      state.feedbackUnread = unreadCount ?? 0;
+      updateAdminTabBadge();
+      const badge = document.getElementById('admin-feedback-unread');
+      if (badge) {
+        badge.textContent =
+          state.feedbackUnread > 0 ? `${state.feedbackUnread} unread` : 'No unread feedback';
+        badge.classList.toggle('badge-blocker', state.feedbackUnread > 0);
+        badge.classList.toggle('badge-ok', state.feedbackUnread === 0);
+      }
+      if (!feedback.length) {
+        el.innerHTML = '<p class="muted">No feedback yet.</p>';
+        return;
+      }
+      el.innerHTML = `
+        <table>
+          <thead><tr><th>When</th><th>From</th><th>Message</th><th>Page</th><th></th></tr></thead>
+          <tbody>
+            ${feedback
+              .map((f) => {
+                const unread = !f.read_at;
+                return `
+              <tr class="${unread ? 'feedback-unread' : ''}">
+                <td>${escapeHtml(f.created_at)}</td>
+                <td class="mono">${escapeHtml(f.user_email)}</td>
+                <td>${escapeHtml(f.message)}</td>
+                <td class="mono muted">${f.page_url ? escapeHtml(f.page_url) : '—'}</td>
+                <td>
+                  ${
+                    unread
+                      ? `<button class="btn-secondary btn-sm mark-feedback-read" data-id="${f.id}" type="button">Mark read</button>`
+                      : `<span class="muted" title="${escapeHtml(f.read_by || '')}">Read</span>`
+                  }
+                </td>
+              </tr>`;
+              })
+              .join('')}
+          </tbody>
+        </table>`;
+      el.querySelectorAll('.mark-feedback-read').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try {
+            await api.markFeedbackRead(btn.dataset.id);
+            await refreshFeedbackList();
+          } catch (e) {
+            alert(e.message);
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (e) {
+      el.textContent = e.message;
+    }
+  }
 
   async function refreshAdminList() {
     const el = document.getElementById('admin-list');
@@ -1767,6 +1963,7 @@ async function renderAdmin() {
     }
   });
 
+  await refreshFeedbackList();
   await refreshAdminList();
 
   try {
@@ -1821,6 +2018,8 @@ function handleAuthChange(status) {
   refreshAuthHeader(authArea);
   state.isAdmin = !!status.admin;
   updateAdminTabs(state.isAdmin);
+  updateFeedbackButton(status.authenticated);
+  syncFeedbackPoll();
   if (status.authenticated) {
     if (ADMIN_VIEWS.has(state.view) && !state.isAdmin) {
       state.view = 'browse';
@@ -1828,11 +2027,19 @@ function handleAuthChange(status) {
         t.classList.toggle('active', t.dataset.view === 'browse');
       });
     }
-    if (state.isAdmin) refreshStopped();
-    else stoppedBanner.classList.add('hidden');
+    if (state.isAdmin) {
+      refreshStopped();
+      refreshFeedbackUnread();
+    } else {
+      stoppedBanner.classList.add('hidden');
+      state.feedbackUnread = 0;
+      updateAdminTabBadge();
+    }
     render();
     return;
   }
+  updateFeedbackButton(false);
+  syncFeedbackPoll();
   renderSignIn(status);
 }
 
@@ -1844,10 +2051,17 @@ function boot() {
       refreshAuthHeader(authArea);
       state.isAdmin = !!status.admin;
       updateAdminTabs(state.isAdmin);
-      if (state.isAdmin) refreshStopped();
+      updateFeedbackButton(true);
+      syncFeedbackPoll();
+      if (state.isAdmin) {
+        refreshStopped();
+        refreshFeedbackUnread();
+      }
       render();
       return;
     }
+    updateFeedbackButton(false);
+    syncFeedbackPoll();
     renderSignIn(status);
     setupGoogleButton(authArea);
   });
