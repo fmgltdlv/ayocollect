@@ -1,22 +1,20 @@
 import { deserialize } from 'flatgeobuf/lib/mjs/geojson.js';
 import { readMetadata } from 'flatgeobuf/lib/mjs/generic/featurecollection.js';
+import { booleanIntersects } from '@turf/boolean-intersects';
+import { bboxPolygon } from '@turf/helpers';
 import type { Env } from '../types';
 import { proxyUtilityLayer, assertLayerObject } from './utility-layers';
 import {
   bboxToRect,
   queryBboxForFileCrs,
+  reprojectFeatures,
   resolveFileProjection,
   type FgbCrs,
+  type GeoFeature,
   type QueryBbox,
 } from './utility-layer-crs';
 
 export type { QueryBbox };
-
-type GeoFeature = {
-  type: 'Feature';
-  geometry: { type: string; coordinates: unknown } | null;
-  properties: Record<string, unknown> | null;
-};
 
 export type LayerQueryMeta = {
   fileCrs: string;
@@ -73,13 +71,19 @@ export async function queryLayerFeatures(
     const fileBbox = queryBboxForFileCrs(bbox, fileCrs);
     const rect = bboxToRect(fileBbox);
 
-    const features: GeoFeature[] = [];
+    const rawFeatures: GeoFeature[] = [];
     for await (const feature of deserialize(fakeUrl, rect)) {
-      features.push(feature as GeoFeature);
+      rawFeatures.push(feature as GeoFeature);
     }
 
+    const features = reprojectFeatures(rawFeatures, fileCrs);
+    const searchArea = bboxPolygon([bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat]);
+    const filtered = features.filter(
+      (feature) => feature.geometry && booleanIntersects(feature, searchArea)
+    );
+
     return {
-      features,
+      features: filtered,
       meta: {
         fileCrs,
         featureCount: header.featuresCount ?? 0,

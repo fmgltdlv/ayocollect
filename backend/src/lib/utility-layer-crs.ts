@@ -67,3 +67,62 @@ export function bboxToRect(bbox: QueryBbox) {
     maxY: bbox.maxLat,
   };
 }
+
+function coordLeafDepth(geometryType: string): number {
+  switch (geometryType) {
+    case 'Point':
+      return 0;
+    case 'LineString':
+    case 'MultiPoint':
+      return 1;
+    case 'Polygon':
+    case 'MultiLineString':
+      return 2;
+    case 'MultiPolygon':
+      return 3;
+    default:
+      return 2;
+  }
+}
+
+function transformCoordinatePairs(
+  coords: unknown,
+  fromProj: string,
+  leafDepth: number,
+  depth = 0
+): unknown {
+  if (depth === leafDepth) {
+    const values = coords as number[];
+    const [x, y, ...rest] = values;
+    const [lon, lat] = proj4(fromProj, WGS84, [x, y]) as [number, number];
+    return rest.length ? [lon, lat, ...rest] : [lon, lat];
+  }
+  return (coords as unknown[]).map((part) =>
+    transformCoordinatePairs(part, fromProj, leafDepth, depth + 1)
+  );
+}
+
+export type GeoFeature = {
+  type: 'Feature';
+  id?: number | string;
+  geometry: { type: string; coordinates: unknown } | null;
+  properties: Record<string, unknown> | null;
+};
+
+/** FlatGeobuf geojson output keeps native CRS coords — reproject for Leaflet (EPSG:4326). */
+export function reprojectFeature(feature: GeoFeature, fromProj: string): GeoFeature {
+  if (!feature.geometry || fromProj === WGS84) return feature;
+  const leafDepth = coordLeafDepth(feature.geometry.type);
+  return {
+    ...feature,
+    geometry: {
+      ...feature.geometry,
+      coordinates: transformCoordinatePairs(feature.geometry.coordinates, fromProj, leafDepth),
+    },
+  };
+}
+
+export function reprojectFeatures(features: GeoFeature[], fromProj: string): GeoFeature[] {
+  if (fromProj === WGS84) return features;
+  return features.map((feature) => reprojectFeature(feature, fromProj));
+}
