@@ -425,13 +425,12 @@ app.get('/api/utility-layers/:layerId/features', async (c) => {
   }
 
   try {
-    const features = await queryLayerFeatures(
-      c.env,
-      workerOrigin(c),
-      c.req.param('layerId'),
-      { minLon, minLat, maxLon, maxLat },
-      c.get('userEmail')
-    );
+    const features = await queryLayerFeatures(c.env, c.req.param('layerId'), {
+      minLon,
+      minLat,
+      maxLon,
+      maxLat,
+    });
     return c.json({ features, count: features.length });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

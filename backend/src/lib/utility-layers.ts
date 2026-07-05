@@ -49,6 +49,15 @@ function layerKey(env: Env, layerId: string): string | null {
   return `${layersPrefix(env)}${layerId}.fgb`;
 }
 
+export async function assertLayerObject(env: Env, layerId: string): Promise<void> {
+  if (!env.UTILITY_LAYERS) throw new Error('Utility layers not configured');
+  if (!isAllowedLayer(env, layerId)) throw new Error('Layer not enabled');
+  const key = layerKey(env, layerId);
+  if (!key) throw new Error('Invalid layer id');
+  const head = await env.UTILITY_LAYERS.head(key);
+  if (!head) throw new Error(`Layer file not found in R2: ${key}`);
+}
+
 export function utilityLayersConfigured(env: Env): boolean {
   return !!env.UTILITY_LAYERS;
 }
