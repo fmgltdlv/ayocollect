@@ -11,6 +11,7 @@
   "dependencies": {
     "@turf/boolean-intersects": "^7.3.5",
     "@turf/helpers": "^7.3.5",
+    "flatgeobuf": "^4.4.0",
     "hono": "^4.6.0",
     "jose": "^6.2.3"
   },

@@ -60,6 +60,8 @@ import {
   proxyUtilityLayer,
   utilityLayersConfigured,
 } from './lib/utility-layers';
+import { queryLayerFeatures } from './lib/utility-layer-query';
+import { verifyUtilityFileToken } from './lib/utility-layer-token';
 
 type HonoEnv = { Bindings: Env; Variables: { userEmail: string; isAdmin: boolean } };
 
@@ -86,6 +88,14 @@ app.use(
 );
 
 app.route('/api/ingest', ingestRoutes);
+
+app.get('/api/utility-layers/:layerId', async (c) => {
+  const token = c.req.query('token');
+  if (!token || !(await verifyUtilityFileToken(c.env, token))) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  return proxyUtilityLayer(c.env, c.req.param('layerId'), c.req.raw);
+});
 
 app.get('/api/health', async (c) =>
   c.json({
@@ -404,8 +414,29 @@ app.get('/api/utility-layers', async (c) => {
   return c.json({ layers, configured: utilityLayersConfigured(c.env) });
 });
 
-app.get('/api/utility-layers/:layerId', async (c) => {
-  return proxyUtilityLayer(c.env, c.req.param('layerId'), c.req.raw);
+app.get('/api/utility-layers/:layerId/features', async (c) => {
+  const q = c.req.query.bind(c.req);
+  const minLon = Number(q('minLon'));
+  const minLat = Number(q('minLat'));
+  const maxLon = Number(q('maxLon'));
+  const maxLat = Number(q('maxLat'));
+  if (![minLon, minLat, maxLon, maxLat].every(Number.isFinite)) {
+    return c.json({ error: 'minLon, minLat, maxLon, maxLat required' }, 400);
+  }
+
+  try {
+    const features = await queryLayerFeatures(
+      c.env,
+      workerOrigin(c),
+      c.req.param('layerId'),
+      { minLon, minLat, maxLon, maxLat },
+      c.get('userEmail')
+    );
+    return c.json({ features, count: features.length });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ error: msg }, 502);
+  }
 });
 
 app.get('/api/analytics/summary', async (c) => {

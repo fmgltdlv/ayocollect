@@ -1,5 +1,4 @@
-import { deserialize } from 'https://esm.sh/flatgeobuf@4.4.0/lib/mjs/geojson.js';
-import { api, apiBase, authHeaders } from './api.js';
+import { api } from './api.js';
 
 const LAYER_COLORS = ['#a855f7', '#14b8a6', '#f59e0b', '#ec4899', '#6366f1', '#84cc16', '#06b6d4', '#ef4444'];
 
@@ -92,30 +91,19 @@ function pointStyle(color) {
   };
 }
 
-async function loadLayerFeatures(layer, rect) {
-  const url = `${apiBase()}/utility-layers/${encodeURIComponent(layer.id)}`;
-  const features = [];
-  // flatgeobuf v4 passes the 5th arg as fetch headers for HTTP range reads
-  for await (const feature of deserialize(url, rect, undefined, false, authHeaders())) {
-    features.push(feature);
-  }
-  return features;
+async function loadLayerFeatures(layer, bbox) {
+  const { features } = await api.getUtilityLayerFeatures(layer.id, bbox);
+  return features ?? [];
 }
 
 export async function loadUtilityLayersOnMap(map, bbox, { onProgress } = {}) {
-  if (!map || !bbox) return { layers: [], totalFeatures: 0 };
+  if (!map || !bbox) return { layers: [], totalFeatures: 0, notes: [] };
 
   const { layers } = await api.listUtilityLayers();
+  if (!layers?.length) return { layers: [], totalFeatures: 0, notes: ['No utility layers configured in R2.'] };
 
-  if (!layers?.length) return { layers: [], totalFeatures: 0 };
-
-  const rect = {
-    minX: bbox.minLon,
-    minY: bbox.minLat,
-    maxX: bbox.maxLon,
-    maxY: bbox.maxLat,
-  };
   const loaded = [];
+  const notes = [];
   let totalFeatures = 0;
 
   for (let i = 0; i < layers.length; i++) {
@@ -124,8 +112,11 @@ export async function loadUtilityLayersOnMap(map, bbox, { onProgress } = {}) {
     const color = layerColor(i);
 
     try {
-      const features = await loadLayerFeatures(layer, rect);
-      if (!features.length) continue;
+      const features = await loadLayerFeatures(layer, bbox);
+      if (!features.length) {
+        notes.push(`${layer.name}: 0 features in search area`);
+        continue;
+      }
 
       const geoLayer = L.geoJSON(
         { type: 'FeatureCollection', features },
@@ -151,11 +142,13 @@ export async function loadUtilityLayersOnMap(map, bbox, { onProgress } = {}) {
       loaded.push({ layer, geoLayer, color, count: features.length });
       totalFeatures += features.length;
     } catch (err) {
+      const message = err.message || String(err);
+      notes.push(`${layer.name}: ${message}`);
       console.warn(`Utility layer ${layer.id} failed`, err);
     }
   }
 
-  return { layers: loaded, totalFeatures };
+  return { layers: loaded, totalFeatures, notes };
 }
 
 function escapeHtml(value) {

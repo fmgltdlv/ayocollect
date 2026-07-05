@@ -106,6 +106,15 @@ export const api = {
   markFeedbackRead: (id) =>
     request(`/admin/feedback/${id}/read`, { method: 'POST' }),
   listUtilityLayers: () => request('/utility-layers'),
+  getUtilityLayerFeatures: (layerId, bbox) => {
+    const q = new URLSearchParams({
+      minLon: String(bbox.minLon),
+      minLat: String(bbox.minLat),
+      maxLon: String(bbox.maxLon),
+      maxLat: String(bbox.maxLat),
+    }).toString();
+    return request(`/utility-layers/${encodeURIComponent(layerId)}/features?${q}`);
+  },
 };
 
 export function badgesHtml(badges) {

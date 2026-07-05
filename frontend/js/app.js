@@ -1802,7 +1802,7 @@ function renderDetail() {
         utilityStatusEl.textContent = 'Loading utility layers…';
       }
       try {
-        const { layers: utilityLayers, totalFeatures } = await loadUtilityLayersOnMap(
+        const { layers: utilityLayers, totalFeatures, notes } = await loadUtilityLayersOnMap(
           state.detailMap,
           queryBbox,
           {
@@ -1818,9 +1818,11 @@ function renderDetail() {
         renderUtilityLegend(legendEl, utilityLayers);
         if (utilityStatusEl) {
           if (utilityLayers.length) {
-            utilityStatusEl.textContent = `Loaded ${utilityLayers.length} utility layer(s), ${totalFeatures} feature(s) in ticket area.`;
+            utilityStatusEl.textContent = `Loaded ${utilityLayers.length} utility layer(s), ${totalFeatures} feature(s) within 300 ft of ticket.`;
+          } else if (notes?.length) {
+            utilityStatusEl.textContent = notes.join(' · ');
           } else {
-            utilityStatusEl.textContent = 'No utility features found in this ticket area.';
+            utilityStatusEl.textContent = 'No utility features found within 300 ft of ticket.';
           }
         }
       } catch (err) {
