@@ -104,6 +104,42 @@ body {
 }
 .tab.active { background: var(--accent); border-color: var(--accent); }
 
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  margin-left: 0.35rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--blocker);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.feedback-modal textarea {
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.feedback-unread td {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.feedback-unread td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 
 .panel {
