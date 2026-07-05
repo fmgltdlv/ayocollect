@@ -22,7 +22,19 @@ function bboxFromLatLngs(latlngs) {
   return { minLat, minLon, maxLat, maxLon };
 }
 
-export function ticketQueryBbox(ticket, latlngs, padding = 0.0015) {
+const TICKET_BUFFER_FEET = 300;
+const FEET_TO_METERS = 0.3048;
+const METERS_PER_DEG_LAT = 111320;
+
+function feetToDegreeBuffer(feet, centerLat) {
+  const meters = feet * FEET_TO_METERS;
+  const latPad = meters / METERS_PER_DEG_LAT;
+  const cosLat = Math.cos((centerLat * Math.PI) / 180);
+  const lonPad = cosLat > 0.01 ? meters / (METERS_PER_DEG_LAT * cosLat) : latPad;
+  return { latPad, lonPad };
+}
+
+export function ticketQueryBbox(ticket, latlngs, bufferFeet = TICKET_BUFFER_FEET) {
   let minLon;
   let minLat;
   let maxLon;
@@ -41,20 +53,23 @@ export function ticketQueryBbox(ticket, latlngs, padding = 0.0015) {
       maxLon = fromPoly.maxLon;
       maxLat = fromPoly.maxLat;
     } else if (ticket.centroid_x != null && ticket.centroid_y != null) {
-      minLon = Number(ticket.centroid_x) - padding;
-      maxLon = Number(ticket.centroid_x) + padding;
-      minLat = Number(ticket.centroid_y) - padding;
-      maxLat = Number(ticket.centroid_y) + padding;
+      minLon = Number(ticket.centroid_x);
+      maxLon = Number(ticket.centroid_x);
+      minLat = Number(ticket.centroid_y);
+      maxLat = Number(ticket.centroid_y);
     } else {
       return null;
     }
   }
 
+  const centerLat = (minLat + maxLat) / 2;
+  const { latPad, lonPad } = feetToDegreeBuffer(bufferFeet, centerLat);
+
   return {
-    minLon: minLon - padding,
-    minLat: minLat - padding,
-    maxLon: maxLon + padding,
-    maxLat: maxLat + padding,
+    minLon: minLon - lonPad,
+    minLat: minLat - latPad,
+    maxLon: maxLon + lonPad,
+    maxLat: maxLat + latPad,
   };
 }
 

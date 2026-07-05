@@ -37,6 +37,8 @@ ALLOWED_EMAIL_DOMAIN = "aspadeco.com"
 ADMIN_EMAILS = "charles@aspadeco.com"
 # R2 key prefix for .fgb files inside the mapdata bucket
 UTILITY_LAYERS_PREFIX = "mapdatafgb"
+# Only these layers are loaded on ticket maps (ids without .fgb)
+UTILITY_LAYERS_ALLOWLIST = "nveconduit,nvefeeder,nveprimary,nvesecondary,nvetelco,nvetranmisssion"
 
 [[secrets_store_secrets]]
 binding = "INGEST_SECRET"

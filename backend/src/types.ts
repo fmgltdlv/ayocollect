@@ -9,6 +9,8 @@ export type Env = {
   UTILITY_LAYERS?: R2Bucket;
   /** Optional key prefix inside the bucket (e.g. "layers"). */
   UTILITY_LAYERS_PREFIX?: string;
+  /** Comma-separated layer ids (without .fgb) to expose; defaults to NVE set. */
+  UTILITY_LAYERS_ALLOWLIST?: string;
   /** Bearer token for POST /api/ingest/* (scraper → Worker). Secrets Store binding. */
   INGEST_SECRET?: SecretsStoreBinding;
   /** When false, Worker does not run batch jobs, cron scrape, or outbound 811 fetches. */

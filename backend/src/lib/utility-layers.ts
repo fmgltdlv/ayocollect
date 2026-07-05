@@ -2,6 +2,31 @@ import type { Env } from '../types';
 
 const LAYER_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
+/** Default allowlist — only these layers are listed/served unless UTILITY_LAYERS_ALLOWLIST is set. */
+const DEFAULT_LAYER_ALLOWLIST = new Set([
+  'nveconduit',
+  'nvefeeder',
+  'nveprimary',
+  'nvesecondary',
+  'nvetelco',
+  'nvetranmisssion',
+]);
+
+function layerAllowlist(env: Env): Set<string> {
+  const raw = env.UTILITY_LAYERS_ALLOWLIST?.trim();
+  if (!raw) return DEFAULT_LAYER_ALLOWLIST;
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+function isAllowedLayer(env: Env, layerId: string): boolean {
+  return layerAllowlist(env).has(layerId.toLowerCase());
+}
+
 export type UtilityLayerInfo = {
   id: string;
   name: string;
@@ -31,6 +56,7 @@ export function utilityLayersConfigured(env: Env): boolean {
 export async function listUtilityLayers(env: Env): Promise<UtilityLayerInfo[]> {
   if (!env.UTILITY_LAYERS) return [];
 
+  const allowed = layerAllowlist(env);
   const prefix = layersPrefix(env);
   const listed = await env.UTILITY_LAYERS.list({ prefix });
   const layers: UtilityLayerInfo[] = [];
@@ -39,7 +65,7 @@ export async function listUtilityLayers(env: Env): Promise<UtilityLayerInfo[]> {
     if (!object.key.toLowerCase().endsWith('.fgb')) continue;
     const relative = object.key.slice(prefix.length);
     const id = relative.replace(/\.fgb$/i, '');
-    if (!id || !LAYER_ID_RE.test(id)) continue;
+    if (!id || !LAYER_ID_RE.test(id) || !allowed.has(id.toLowerCase())) continue;
     layers.push({ id, name: formatLayerName(id), key: object.key });
   }
 
@@ -77,6 +103,13 @@ export async function proxyUtilityLayer(env: Env, layerId: string, request: Requ
   if (!env.UTILITY_LAYERS) {
     return new Response(JSON.stringify({ error: 'Utility layers not configured' }), {
       status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!isAllowedLayer(env, layerId)) {
+    return new Response(JSON.stringify({ error: 'Layer not enabled' }), {
+      status: 404,
       headers: { 'Content-Type': 'application/json' },
     });
   }
