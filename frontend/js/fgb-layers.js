@@ -1,4 +1,4 @@
-import { deserialize } from 'https://esm.sh/flatgeobuf@3.31.1/lib/mjs/geojson.js';
+import { deserialize } from 'https://esm.sh/flatgeobuf@4.4.0/lib/mjs/geojson.js';
 import { api, apiBase, authHeaders } from './api.js';
 
 const LAYER_COLORS = ['#a855f7', '#14b8a6', '#f59e0b', '#ec4899', '#6366f1', '#84cc16', '#06b6d4', '#ef4444'];
@@ -92,10 +92,11 @@ function pointStyle(color) {
   };
 }
 
-async function loadLayerFeatures(layer, rect, headers) {
+async function loadLayerFeatures(layer, rect) {
   const url = `${apiBase()}/utility-layers/${encodeURIComponent(layer.id)}`;
   const features = [];
-  for await (const feature of deserialize(url, rect, undefined, false, headers)) {
+  // flatgeobuf v4 passes the 5th arg as fetch headers for HTTP range reads
+  for await (const feature of deserialize(url, rect, undefined, false, authHeaders())) {
     features.push(feature);
   }
   return features;
@@ -114,7 +115,6 @@ export async function loadUtilityLayersOnMap(map, bbox, { onProgress } = {}) {
     maxX: bbox.maxLon,
     maxY: bbox.maxLat,
   };
-  const headers = authHeaders();
   const loaded = [];
   let totalFeatures = 0;
 
@@ -124,7 +124,7 @@ export async function loadUtilityLayersOnMap(map, bbox, { onProgress } = {}) {
     const color = layerColor(i);
 
     try {
-      const features = await loadLayerFeatures(layer, rect, headers);
+      const features = await loadLayerFeatures(layer, rect);
       if (!features.length) continue;
 
       const geoLayer = L.geoJSON(

@@ -80,7 +80,8 @@ app.use(
   '/api/*',
   cors({
     origin: ALLOWED_ORIGINS,
-    allowHeaders: ['Content-Type', 'Authorization'],
+    allowHeaders: ['Content-Type', 'Authorization', 'Range'],
+    exposeHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length'],
   })
 );
 
