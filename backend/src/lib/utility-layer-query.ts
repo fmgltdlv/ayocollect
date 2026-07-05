@@ -1,7 +1,6 @@
 import { deserialize } from 'flatgeobuf/lib/mjs/geojson.js';
 import { readMetadata } from 'flatgeobuf/lib/mjs/generic/featurecollection.js';
 import { booleanIntersects } from '@turf/boolean-intersects';
-import { bboxPolygon } from '@turf/helpers';
 import type { Env } from '../types';
 import { proxyUtilityLayer, assertLayerObject } from './utility-layers';
 import {
@@ -15,6 +14,26 @@ import {
 } from './utility-layer-crs';
 
 export type { QueryBbox };
+
+function searchAreaFeature(bbox: QueryBbox) {
+  const { minLon, minLat, maxLon, maxLat } = bbox;
+  return {
+    type: 'Feature' as const,
+    properties: {},
+    geometry: {
+      type: 'Polygon' as const,
+      coordinates: [
+        [
+          [minLon, minLat],
+          [maxLon, minLat],
+          [maxLon, maxLat],
+          [minLon, maxLat],
+          [minLon, minLat],
+        ],
+      ],
+    },
+  };
+}
 
 export type LayerQueryMeta = {
   fileCrs: string;
@@ -77,7 +96,7 @@ export async function queryLayerFeatures(
     }
 
     const features = reprojectFeatures(rawFeatures, fileCrs);
-    const searchArea = bboxPolygon([bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat]);
+    const searchArea = searchAreaFeature(bbox);
     const filtered = features.filter(
       (feature) => feature.geometry && booleanIntersects(feature, searchArea)
     );
