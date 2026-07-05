@@ -55,6 +55,11 @@ import {
   submitFeedback,
 } from './lib/feedback';
 import { resumeJob } from './lib/job-resume';
+import {
+  listUtilityLayers,
+  proxyUtilityLayer,
+  utilityLayersConfigured,
+} from './lib/utility-layers';
 
 type HonoEnv = { Bindings: Env; Variables: { userEmail: string; isAdmin: boolean } };
 
@@ -89,6 +94,7 @@ app.get('/api/health', async (c) =>
     dedicatedScraper: !!c.env.SCRAPER_WORKER_URL?.trim(),
     scraperWorkerUrl: c.env.SCRAPER_WORKER_URL?.trim() || null,
     auth: authDisabled(c.env) ? 'disabled' : 'google',
+    utilityLayers: utilityLayersConfigured(c.env),
   })
 );
 
@@ -390,6 +396,15 @@ app.post('/api/tickets/polygons', async (c) => {
   const refs = body.tickets.filter((t) => valid.has(t.system)).slice(0, 100);
   const polygons = await loadTicketPolygons(c.env.DB, refs);
   return c.json({ polygons });
+});
+
+app.get('/api/utility-layers', async (c) => {
+  const layers = await listUtilityLayers(c.env);
+  return c.json({ layers, configured: utilityLayersConfigured(c.env) });
+});
+
+app.get('/api/utility-layers/:layerId', async (c) => {
+  return proxyUtilityLayer(c.env, c.req.param('layerId'), c.req.raw);
 });
 
 app.get('/api/analytics/summary', async (c) => {

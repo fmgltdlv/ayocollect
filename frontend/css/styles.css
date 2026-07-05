@@ -428,6 +428,58 @@ tr.clickable:hover { background: rgba(59, 130, 246, 0.1); }
   height: 320px;
 }
 
+.detail-map-wrap {
+  position: relative;
+}
+
+.detail-utility-status {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
+.map-legend {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  z-index: 500;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.78rem;
+  max-width: 220px;
+}
+
+.map-legend-title {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.map-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  line-height: 1.35;
+}
+
+.map-legend-swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.utility-popup th {
+  text-align: left;
+  padding-right: 0.5rem;
+  font-weight: 500;
+  vertical-align: top;
+}
+
+.utility-popup td {
+  word-break: break-word;
+}
+
 @media (max-width: 900px) {
   .detail-modal .detail-grid {
     grid-template-columns: 1fr;

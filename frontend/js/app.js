@@ -1,5 +1,10 @@
 import { api, badgesHtml, bboxFromLayer, parseWktToLatLngs } from './api.js';
 import {
+  loadUtilityLayersOnMap,
+  renderUtilityLegend,
+  ticketQueryBbox,
+} from './fgb-layers.js';
+import {
   initAuth,
   mountAuthHeader,
   refreshAuthHeader,
@@ -31,6 +36,7 @@ let state = {
   analyticsMap: null,
   searchMap: null,
   detailMap: null,
+  detailUtilityGroup: null,
   drawLayer: null,
   drawnGroup: null,
   ticketClusterGroup: null,
@@ -1625,6 +1631,10 @@ function onDetailModalKeydown(e) {
 
 function closeDetailModal() {
   document.removeEventListener('keydown', onDetailModalKeydown);
+  if (state.detailUtilityGroup) {
+    state.detailUtilityGroup.clearLayers();
+    state.detailUtilityGroup = null;
+  }
   if (state.detailMap) {
     state.detailMap.remove();
     state.detailMap = null;
@@ -1725,7 +1735,11 @@ function renderDetail() {
       </div>
       <div class="panel detail-panel-inline">
         <h3>Map</h3>
-        <div id="detail-map"></div>
+        <p id="detail-utility-status" class="muted detail-utility-status hidden"></p>
+        <div class="detail-map-wrap">
+          <div id="detail-map"></div>
+          <div id="detail-map-legend" class="map-legend hidden"></div>
+        </div>
       </div>
     </div>
   `;
@@ -1737,14 +1751,23 @@ function renderDetail() {
   });
 
   setTimeout(async () => {
+    if (state.detailUtilityGroup) {
+      state.detailUtilityGroup.clearLayers();
+      state.detailUtilityGroup = null;
+    }
     if (state.detailMap) state.detailMap.remove();
     const mapEl = body.querySelector('#detail-map');
     if (!mapEl) return;
+
+    const utilityStatusEl = body.querySelector('#detail-utility-status');
+    const legendEl = body.querySelector('#detail-map-legend');
 
     state.detailMap = L.map(mapEl).setView([36.16, -115.15], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap',
     }).addTo(state.detailMap);
+
+    state.detailUtilityGroup = L.featureGroup().addTo(state.detailMap);
 
     const layers = [];
     const latlngs = parseWktToLatLngs(t.polygon_wkt);
@@ -1770,6 +1793,43 @@ function renderDetail() {
       } catch {
         /* skip missing overlap ticket */
       }
+    }
+
+    const queryBbox = ticketQueryBbox(t, latlngs);
+    if (queryBbox) {
+      if (utilityStatusEl) {
+        utilityStatusEl.classList.remove('hidden');
+        utilityStatusEl.textContent = 'Loading utility layers…';
+      }
+      try {
+        const { layers: utilityLayers, totalFeatures } = await loadUtilityLayersOnMap(
+          state.detailMap,
+          queryBbox,
+          {
+            onProgress: (message) => {
+              if (utilityStatusEl) utilityStatusEl.textContent = message;
+            },
+          }
+        );
+        for (const entry of utilityLayers) {
+          state.detailUtilityGroup.addLayer(entry.geoLayer);
+          layers.push(entry.geoLayer);
+        }
+        renderUtilityLegend(legendEl, utilityLayers);
+        if (utilityStatusEl) {
+          if (utilityLayers.length) {
+            utilityStatusEl.textContent = `Loaded ${utilityLayers.length} utility layer(s), ${totalFeatures} feature(s) in ticket area.`;
+          } else {
+            utilityStatusEl.textContent = 'No utility features found in this ticket area.';
+          }
+        }
+      } catch (err) {
+        if (utilityStatusEl) {
+          utilityStatusEl.textContent = `Utility layers unavailable: ${err.message || err}`;
+        }
+      }
+    } else if (utilityStatusEl) {
+      utilityStatusEl.classList.add('hidden');
     }
 
     if (layers.length) {

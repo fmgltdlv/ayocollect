@@ -5,6 +5,8 @@ function apiBase() {
   return '/api';
 }
 
+export { apiBase };
+
 let authTokenGetter = () => null;
 let onUnauthorized = () => {};
 
@@ -16,10 +18,15 @@ export function setUnauthorizedHandler(fn) {
   onUnauthorized = fn;
 }
 
-async function request(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+export function authHeaders(extra = {}) {
+  const headers = { ...extra };
   const token = authTokenGetter();
   if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+async function request(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...authHeaders(), ...(options.headers || {}) };
 
   const res = await fetch(`${apiBase()}${path}`, {
     headers,
@@ -98,6 +105,7 @@ export const api = {
   feedbackUnreadCount: () => request('/admin/feedback/unread-count'),
   markFeedbackRead: (id) =>
     request(`/admin/feedback/${id}/read`, { method: 'POST' }),
+  listUtilityLayers: () => request('/utility-layers'),
 };
 
 export function badgesHtml(badges) {
