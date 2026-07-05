@@ -34,7 +34,14 @@ ingestRoutes.post('/digalert', async (c) => {
   const body = await c.req.json<DigAlertIngestBody>();
   const result = await ingestDigAlertBatch(c.env.DB, body);
   if ('error' in result) return c.json(result, 400);
-  await trackContainerIngest(c.env.DB, 'digalert', body, result.accepted, result.failed);
+  await trackContainerIngest(
+    c.env.DB,
+    'digalert',
+    body,
+    result.accepted,
+    result.failed,
+    result.lastAcceptedTicket
+  );
   return c.json(result);
 });
 
@@ -42,7 +49,14 @@ ingestRoutes.post('/usan-ca', async (c) => {
   const body = await c.req.json<UsanIngestBody>();
   const result = await ingestUsanBatch(c.env.DB, 'usan_ca', body);
   if ('error' in result) return c.json(result, 400);
-  await trackContainerIngest(c.env.DB, 'usan-ca', body, result.accepted, result.failed);
+  await trackContainerIngest(
+    c.env.DB,
+    'usan-ca',
+    body,
+    result.accepted,
+    result.failed,
+    result.lastAcceptedTicket
+  );
   return c.json(result);
 });
 
@@ -50,7 +64,14 @@ ingestRoutes.post('/usan-nv', async (c) => {
   const body = await c.req.json<UsanIngestBody>();
   const result = await ingestUsanBatch(c.env.DB, 'usan_nv', body);
   if ('error' in result) return c.json(result, 400);
-  await trackContainerIngest(c.env.DB, 'usan-nv', body, result.accepted, result.failed);
+  await trackContainerIngest(
+    c.env.DB,
+    'usan-nv',
+    body,
+    result.accepted,
+    result.failed,
+    result.lastAcceptedTicket
+  );
   return c.json(result);
 });
 

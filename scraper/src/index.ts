@@ -38,6 +38,7 @@ type RunBody = {
   mode?: string;
   systems?: string[];
   jobId?: number;
+  resumeCursors?: Record<string, { date: string; seq?: number; counter?: number }>;
 };
 
 function scrapeEnv(
@@ -61,6 +62,9 @@ function overridesFromBody(body: RunBody): Record<string, string> {
   }
   if (body.jobId != null) {
     overrides.SCRAPE_JOB_ID = String(body.jobId);
+  }
+  if (body.resumeCursors && Object.keys(body.resumeCursors).length) {
+    overrides.SCRAPE_RESUME_CURSORS = JSON.stringify(body.resumeCursors);
   }
   return overrides;
 }

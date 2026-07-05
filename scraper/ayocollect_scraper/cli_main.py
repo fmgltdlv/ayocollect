@@ -67,7 +67,7 @@ def main() -> int:
         systems = None
         if args.systems:
             systems = [s.strip() for s in args.systems.split(",") if s.strip()]
-        run_scan(settings, day, day, systems)
+        run_scan(settings, day, day, systems, resume_cursors=settings.resume_cursors)
         return 0
 
     if args.command == "job-exit":
@@ -90,7 +90,7 @@ def main() -> int:
         systems = None
         if args.systems:
             systems = [s.strip() for s in args.systems.split(",") if s.strip()]
-        run_scan(settings, args.start, end, systems)
+        run_scan(settings, args.start, end, systems, resume_cursors=settings.resume_cursors)
         return 0
 
     return 1

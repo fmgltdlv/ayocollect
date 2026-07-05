@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,7 @@ class Settings:
     api_port: int
     api_key: str | None
     scrape_job_id: int | None = None
+    resume_cursors: dict[str, dict[str, int | str]] | None = None
 
 
 def load_settings() -> Settings:
@@ -43,6 +45,16 @@ def load_settings() -> Settings:
     job_raw = os.getenv("SCRAPE_JOB_ID", "").strip()
     scrape_job_id = int(job_raw) if job_raw.isdigit() else None
 
+    resume_raw = os.getenv("SCRAPE_RESUME_CURSORS", "").strip()
+    resume_cursors = None
+    if resume_raw:
+        try:
+            parsed = json.loads(resume_raw)
+            if isinstance(parsed, dict):
+                resume_cursors = parsed
+        except json.JSONDecodeError:
+            resume_cursors = None
+
     return Settings(
         worker_url=worker_url,
         ingest_secret=ingest_secret,
@@ -55,4 +67,5 @@ def load_settings() -> Settings:
         api_port=int(os.getenv("SCRAPER_API_PORT", "8789")),
         api_key=os.getenv("SCRAPER_API_KEY") or None,
         scrape_job_id=scrape_job_id,
+        resume_cursors=resume_cursors,
     )

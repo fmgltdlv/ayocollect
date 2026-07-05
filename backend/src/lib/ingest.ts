@@ -15,6 +15,7 @@ export type IngestBatchResult = IngestBatchMeta & {
   accepted: number;
   failed: number;
   errors: { ticket: string | null; error: string }[];
+  lastAcceptedTicket?: string | null;
 };
 
 export type DigAlertIngestBody = IngestBatchMeta & {
@@ -60,13 +61,16 @@ export async function ingestDigAlertBatch(
 
   const errors: IngestBatchResult['errors'] = [];
   let accepted = 0;
+  let lastAcceptedTicket: string | null = null;
 
   for (const envelope of body.tickets) {
     const label = ticketLabelDigAlert(envelope);
     try {
       const id = await upsertDigAlert(db, envelope);
-      if (id) accepted += 1;
-      else errors.push({ ticket: label, error: 'missing ticket number in payload' });
+      if (id) {
+        accepted += 1;
+        if (label) lastAcceptedTicket = label;
+      } else errors.push({ ticket: label, error: 'missing ticket number in payload' });
     } catch (e) {
       errors.push({
         ticket: label,
@@ -81,6 +85,7 @@ export async function ingestDigAlertBatch(
     accepted,
     failed: errors.length,
     errors,
+    lastAcceptedTicket,
   };
 }
 
@@ -97,13 +102,16 @@ export async function ingestUsanBatch(
 
   const errors: IngestBatchResult['errors'] = [];
   let accepted = 0;
+  let lastAcceptedTicket: string | null = null;
 
   for (const item of body.tickets) {
     const label = ticketLabelUsan(item);
     try {
       const id = await upsertUsan(db, table, item.payload, item.polygonWkt ?? null);
-      if (id) accepted += 1;
-      else errors.push({ ticket: label, error: 'missing posrTicket.ticketNumber in payload' });
+      if (id) {
+        accepted += 1;
+        if (label) lastAcceptedTicket = label;
+      } else errors.push({ ticket: label, error: 'missing posrTicket.ticketNumber in payload' });
     } catch (e) {
       errors.push({
         ticket: label,
@@ -118,6 +126,7 @@ export async function ingestUsanBatch(
     accepted,
     failed: errors.length,
     errors,
+    lastAcceptedTicket,
   };
 }
 
@@ -126,8 +135,17 @@ export async function trackContainerIngest(
   system: ContainerJobSystem,
   body: IngestBatchMeta,
   accepted: number,
-  failed: number
+  failed: number,
+  lastAcceptedTicket?: string | null
 ): Promise<void> {
   if (!body.jobId) return;
-  await recordContainerBatch(db, body.jobId, system, accepted, failed, body.batchId);
+  await recordContainerBatch(
+    db,
+    body.jobId,
+    system,
+    accepted,
+    failed,
+    body.batchId,
+    lastAcceptedTicket
+  );
 }

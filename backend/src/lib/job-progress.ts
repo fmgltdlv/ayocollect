@@ -135,7 +135,8 @@ function containerSystemProgress(
   raw: string | null,
   fetched: number,
   start: string,
-  end: string
+  end: string,
+  system: 'digalert' | 'usan'
 ): SystemProgress {
   if (!enabled) {
     return {
@@ -150,24 +151,38 @@ function containerSystemProgress(
     };
   }
   const state = parseContainerState(raw);
-  const current = state.scanDate ?? start;
-  const done = state.done;
+  const current = state.date ?? state.scanDate ?? start;
+  const done = state.done || compareDates(current, end) > 0;
   const pct = done ? 100 : dateProgressPct(start, end, current);
   const activity = state.lastBatchAt
     ? ` · last batch ${state.lastBatchAt.replace('T', ' ').slice(0, 19)} UTC`
     : '';
+  let nextTicket: string | null = null;
+  if (!done && state.date) {
+    if (system === 'digalert' && state.counter != null) {
+      nextTicket = formatDigAlertTicket(new Date(state.date + 'T12:00:00Z'), state.counter);
+    } else if (system === 'usan' && state.seq != null) {
+      nextTicket = formatUsanTicket(state.date, state.seq);
+    }
+  }
+  const ticketNote =
+    nextTicket && state.lastTicket
+      ? ` · resume from ${nextTicket} (after ${state.lastTicket})`
+      : nextTicket
+        ? ` · resume from ${nextTicket}`
+        : '';
   return {
     enabled: true,
     fetched,
     currentDate: current,
-    consecutiveMisses: 0,
-    nextTicket: null,
+    consecutiveMisses: state.consecutiveMisses ?? 0,
+    nextTicket,
     done,
     dateProgressPct: pct,
     detail: done
       ? `Finished — ${state.batches} batch(es) ingested, ${fetched} ticket(s)`
       : state.batches
-        ? `${state.batches} batch(es) ingested, ${fetched} ticket(s)${activity}`
+        ? `${state.batches} batch(es) ingested, ${fetched} ticket(s)${ticketNote}${activity}`
         : 'Waiting for scraper batches…',
   };
 }
@@ -181,21 +196,24 @@ export function buildJobProgress(job: FetchJobRow): JobProgress {
           job.digalert_cursor,
           job.digalert_fetched,
           job.start_date,
-          job.end_date
+          job.end_date,
+          'digalert'
         ),
         usanCa: containerSystemProgress(
           !!job.include_usan_ca,
           job.usan_ca_cursor,
           job.usan_ca_fetched,
           job.start_date,
-          job.end_date
+          job.end_date,
+          'usan'
         ),
         usanNv: containerSystemProgress(
           !!job.include_usan_nv,
           job.usan_nv_cursor,
           job.usan_nv_fetched,
           job.start_date,
-          job.end_date
+          job.end_date,
+          'usan'
         ),
       }
     : {
