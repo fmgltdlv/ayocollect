@@ -1629,6 +1629,37 @@ function onDetailModalKeydown(e) {
   if (e.key === 'Escape') closeDetailModal();
 }
 
+function waitForDetailMapLayout(map) {
+  return new Promise((resolve) => {
+    map.invalidateSize();
+    requestAnimationFrame(() => {
+      map.invalidateSize();
+      requestAnimationFrame(resolve);
+    });
+  });
+}
+
+function fitDetailMapToTicketLayers(map, ticketLayers) {
+  const boundsLayers = ticketLayers.filter((layer) => {
+    try {
+      return layer.getBounds?.().isValid?.();
+    } catch {
+      return false;
+    }
+  });
+  if (!boundsLayers.length) return;
+
+  const bounds = L.featureGroup(boundsLayers).getBounds();
+  if (!bounds.isValid()) return;
+  map.fitBounds(bounds.pad(0.12), { maxZoom: 18 });
+}
+
+function raiseTicketLayers(ticketLayers) {
+  for (const layer of ticketLayers) {
+    layer.bringToFront?.();
+  }
+}
+
 function closeDetailModal() {
   document.removeEventListener('keydown', onDetailModalKeydown);
   if (state.detailUtilityGroup) {
@@ -1769,14 +1800,15 @@ function renderDetail() {
 
     state.detailUtilityGroup = L.featureGroup().addTo(state.detailMap);
 
-    const layers = [];
+    const ticketLayers = [];
     const latlngs = parseWktToLatLngs(t.polygon_wkt);
     if (latlngs.length) {
-      const poly = L.polygon(latlngs, { color: '#3b82f6', fillOpacity: 0.25 }).addTo(state.detailMap);
-      layers.push(poly);
+      const poly = L.polygon(latlngs, { color: '#3b82f6', weight: 3, fillOpacity: 0.25 }).addTo(
+        state.detailMap
+      );
+      ticketLayers.push(poly);
     } else if (t.centroid_y && t.centroid_x) {
-      state.detailMap.setView([t.centroid_y, t.centroid_x], 15);
-      layers.push(L.marker([t.centroid_y, t.centroid_x]).addTo(state.detailMap));
+      ticketLayers.push(L.marker([t.centroid_y, t.centroid_x]).addTo(state.detailMap));
     }
 
     for (const o of overlaps.slice(0, 20)) {
@@ -1784,8 +1816,8 @@ function renderDetail() {
         const other = await api.getTicket(o.system, o.ticketNumber, o.revision ?? undefined);
         const otherLatLngs = parseWktToLatLngs(other.ticket?.polygon_wkt);
         if (otherLatLngs.length) {
-          layers.push(
-            L.polygon(otherLatLngs, { color: '#f97316', fillOpacity: 0.15, dashArray: '4' }).addTo(
+          ticketLayers.push(
+            L.polygon(otherLatLngs, { color: '#f97316', fillOpacity: 0.15, dashArray: '4', weight: 2 }).addTo(
               state.detailMap
             )
           );
@@ -1794,6 +1826,9 @@ function renderDetail() {
         /* skip missing overlap ticket */
       }
     }
+
+    await waitForDetailMapLayout(state.detailMap);
+    fitDetailMapToTicketLayers(state.detailMap, ticketLayers);
 
     const queryBbox = ticketQueryBbox(t, latlngs);
     if (queryBbox) {
@@ -1806,16 +1841,14 @@ function renderDetail() {
           state.detailMap,
           queryBbox,
           {
+            targetGroup: state.detailUtilityGroup,
             onProgress: (message) => {
               if (utilityStatusEl) utilityStatusEl.textContent = message;
             },
           }
         );
-        for (const entry of utilityLayers) {
-          state.detailUtilityGroup.addLayer(entry.geoLayer);
-          layers.push(entry.geoLayer);
-        }
         renderUtilityLegend(legendEl, utilityLayers);
+        raiseTicketLayers(ticketLayers);
         if (utilityStatusEl) {
           if (utilityLayers.length) {
             utilityStatusEl.textContent = `Loaded ${utilityLayers.length} utility layer(s), ${totalFeatures} feature(s) within 300 ft of ticket.`;
@@ -1834,10 +1867,8 @@ function renderDetail() {
       utilityStatusEl.classList.add('hidden');
     }
 
-    if (layers.length) {
-      const group = L.featureGroup(layers);
-      state.detailMap.fitBounds(group.getBounds().pad(0.1));
-    }
+    await waitForDetailMapLayout(state.detailMap);
+    fitDetailMapToTicketLayers(state.detailMap, ticketLayers);
     state.detailMap.invalidateSize();
   }, 0);
 }

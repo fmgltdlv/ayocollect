@@ -75,8 +75,8 @@ export function ticketQueryBbox(ticket, latlngs, bufferFeet = TICKET_BUFFER_FEET
 function layerStyle(color) {
   return {
     color,
-    weight: 2,
-    opacity: 0.9,
+    weight: 3,
+    opacity: 0.95,
     fillOpacity: 0.08,
   };
 }
@@ -93,10 +93,51 @@ function pointStyle(color) {
 
 async function loadLayerFeatures(layer, bbox) {
   const { features, meta } = await api.getUtilityLayerFeatures(layer.id, bbox);
-  return { features: features ?? [], meta: meta ?? null };
+  return { features: filterDisplayableFeatures(features ?? []), meta: meta ?? null };
 }
 
-export async function loadUtilityLayersOnMap(map, bbox, { onProgress } = {}) {
+function coordLeafDepth(geometryType) {
+  switch (geometryType) {
+    case 'Point':
+      return 0;
+    case 'LineString':
+    case 'MultiPoint':
+      return 1;
+    case 'Polygon':
+    case 'MultiLineString':
+      return 2;
+    case 'MultiPolygon':
+      return 3;
+    default:
+      return 2;
+  }
+}
+
+function sampleCoordinatePairs(coords, leafDepth, depth = 0, out = []) {
+  if (out.length >= 8) return out;
+  if (depth === leafDepth) {
+    out.push(coords);
+    return out;
+  }
+  for (const part of coords) {
+    sampleCoordinatePairs(part, leafDepth, depth + 1, out);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+function looksLikeWgs84Geometry(geometry) {
+  if (!geometry?.coordinates) return false;
+  const pairs = sampleCoordinatePairs(geometry.coordinates, coordLeafDepth(geometry.type));
+  if (!pairs.length) return false;
+  return pairs.every(([lon, lat]) => Math.abs(lon) <= 180 && Math.abs(lat) <= 90);
+}
+
+function filterDisplayableFeatures(features) {
+  return features.filter((feature) => looksLikeWgs84Geometry(feature.geometry));
+}
+
+export async function loadUtilityLayersOnMap(map, bbox, { onProgress, targetGroup } = {}) {
   if (!map || !bbox) return { layers: [], totalFeatures: 0, notes: [] };
 
   const { layers } = await api.listUtilityLayers();
@@ -139,7 +180,10 @@ export async function loadUtilityLayersOnMap(map, bbox, { onProgress } = {}) {
           },
         }
       );
-      geoLayer.addTo(map);
+
+      if (targetGroup) targetGroup.addLayer(geoLayer);
+      else geoLayer.addTo(map);
+
       loaded.push({ layer, geoLayer, color, count: features.length });
       totalFeatures += features.length;
     } catch (err) {
