@@ -20,6 +20,8 @@ const feedbackBtn = document.getElementById('feedback-btn');
 const BROWSE_PAGE_SIZE = 100;
 const BROWSE_ZOOM_CLUSTERS_UNTIL = 13;
 const BROWSE_ZOOM_POLYGONS_FROM = 17;
+const DETAIL_MAP_MAX_ZOOM = 22;
+const DETAIL_MAP_TILE_NATIVE_MAX_ZOOM = 19;
 
 let state = {
   view: 'browse',
@@ -1651,7 +1653,7 @@ function fitDetailMapToTicketLayers(map, ticketLayers) {
 
   const bounds = L.featureGroup(boundsLayers).getBounds();
   if (!bounds.isValid()) return;
-  map.fitBounds(bounds.pad(0.12), { maxZoom: 18 });
+  map.fitBounds(bounds.pad(0.12), { maxZoom: DETAIL_MAP_MAX_ZOOM });
 }
 
 function raiseTicketLayers(ticketLayers) {
@@ -1793,9 +1795,11 @@ function renderDetail() {
     const utilityStatusEl = body.querySelector('#detail-utility-status');
     const legendEl = body.querySelector('#detail-map-legend');
 
-    state.detailMap = L.map(mapEl).setView([36.16, -115.15], 12);
+    state.detailMap = L.map(mapEl, { maxZoom: DETAIL_MAP_MAX_ZOOM }).setView([36.16, -115.15], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap',
+      maxNativeZoom: DETAIL_MAP_TILE_NATIVE_MAX_ZOOM,
+      maxZoom: DETAIL_MAP_MAX_ZOOM,
     }).addTo(state.detailMap);
 
     state.detailUtilityGroup = L.featureGroup().addTo(state.detailMap);
