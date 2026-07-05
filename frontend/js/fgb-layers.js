@@ -92,8 +92,8 @@ function pointStyle(color) {
 }
 
 async function loadLayerFeatures(layer, bbox) {
-  const { features } = await api.getUtilityLayerFeatures(layer.id, bbox);
-  return features ?? [];
+  const { features, meta } = await api.getUtilityLayerFeatures(layer.id, bbox);
+  return { features: features ?? [], meta: meta ?? null };
 }
 
 export async function loadUtilityLayersOnMap(map, bbox, { onProgress } = {}) {
@@ -112,9 +112,10 @@ export async function loadUtilityLayersOnMap(map, bbox, { onProgress } = {}) {
     const color = layerColor(i);
 
     try {
-      const features = await loadLayerFeatures(layer, bbox);
+      const { features, meta } = await loadLayerFeatures(layer, bbox);
       if (!features.length) {
-        notes.push(`${layer.name}: 0 features in search area`);
+        const crsNote = meta?.fileCrs && meta.fileCrs !== 'EPSG:4326' ? ` (queried in ${meta.fileCrs})` : '';
+        notes.push(`${layer.name}: 0 features within 300 ft${crsNote}`);
         continue;
       }
 

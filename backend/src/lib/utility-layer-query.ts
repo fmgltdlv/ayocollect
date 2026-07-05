@@ -1,18 +1,26 @@
 import { deserialize } from 'flatgeobuf/lib/mjs/geojson.js';
+import { readMetadata } from 'flatgeobuf/lib/mjs/generic/featurecollection.js';
 import type { Env } from '../types';
 import { proxyUtilityLayer, assertLayerObject } from './utility-layers';
+import {
+  bboxToRect,
+  queryBboxForFileCrs,
+  resolveFileProjection,
+  type FgbCrs,
+  type QueryBbox,
+} from './utility-layer-crs';
 
-export type QueryBbox = {
-  minLon: number;
-  minLat: number;
-  maxLon: number;
-  maxLat: number;
-};
+export type { QueryBbox };
 
 type GeoFeature = {
   type: 'Feature';
   geometry: { type: string; coordinates: unknown } | null;
   properties: Record<string, unknown> | null;
+};
+
+export type LayerQueryMeta = {
+  fileCrs: string;
+  featureCount: number;
 };
 
 /** Routes flatgeobuf HTTP range reads to the R2 proxy (no Worker self-fetch). */
@@ -34,14 +42,12 @@ function ensureFetchPatched(): void {
   fetchPatched = true;
 }
 
-export async function queryLayerFeatures(
+function withR2Fetch<T>(
   env: Env,
   layerId: string,
-  bbox: QueryBbox
-): Promise<GeoFeature[]> {
-  await assertLayerObject(env, layerId);
+  run: (fakeUrl: string) => Promise<T>
+): Promise<T> {
   ensureFetchPatched();
-
   const queryId = crypto.randomUUID();
   const fakeUrl = `https://r2.local/${queryId}/${layerId}.fgb`;
 
@@ -49,26 +55,41 @@ export async function queryLayerFeatures(
     proxyUtilityLayer(env, layerId, new Request(fakeUrl, init))
   );
 
-  try {
-    const rect = {
-      minX: bbox.minLon,
-      minY: bbox.minLat,
-      maxX: bbox.maxLon,
-      maxY: bbox.maxLat,
-    };
+  return run(fakeUrl).finally(() => {
+    r2FetchHandlers.delete(queryId);
+  });
+}
+
+export async function queryLayerFeatures(
+  env: Env,
+  layerId: string,
+  bbox: QueryBbox
+): Promise<{ features: GeoFeature[]; meta: LayerQueryMeta }> {
+  await assertLayerObject(env, layerId);
+
+  return withR2Fetch(env, layerId, async (fakeUrl) => {
+    const header = await readMetadata(fakeUrl);
+    const fileCrs = resolveFileProjection(header.crs as FgbCrs);
+    const fileBbox = queryBboxForFileCrs(bbox, fileCrs);
+    const rect = bboxToRect(fileBbox);
 
     const features: GeoFeature[] = [];
     for await (const feature of deserialize(fakeUrl, rect)) {
       features.push(feature as GeoFeature);
     }
-    return features;
-  } catch (err) {
+
+    return {
+      features,
+      meta: {
+        fileCrs,
+        featureCount: header.featuresCount ?? 0,
+      },
+    };
+  }).catch((err) => {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('Not a FlatGeobuf file')) {
       throw new Error(`Layer ${layerId} is missing or not a valid .fgb in R2`);
     }
     throw err;
-  } finally {
-    r2FetchHandlers.delete(queryId);
-  }
+  });
 }
