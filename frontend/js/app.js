@@ -556,7 +556,7 @@ function renderBrowseResults(tickets, total, page, fitMap = false) {
 
   const start = page * BROWSE_PAGE_SIZE + 1;
   const end = Math.min(start + tickets.length - 1, total);
-  const multiSystem = state.browseSystems.length > 1;
+  const showSystemCol = new Set(tickets.map((t) => t.system)).size > 1;
   const adminRefresh = state.isAdmin;
 
   resultsEl.innerHTML = `
@@ -576,15 +576,16 @@ function renderBrowseResults(tickets, total, page, fitMap = false) {
         </div>
       </div>
     </div>
-    <table>
-      <thead><tr>
-        ${adminRefresh ? '<th class="ticket-refresh-col"><input type="checkbox" id="browse-select-all" title="Select all on this page" aria-label="Select all tickets on this page" /></th>' : ''}
-        <th>Badges</th>${multiSystem ? '<th>System</th>' : ''}<th>Ticket</th><th>Summary</th><th>Updated</th>
-      </tr></thead>
-      <tbody>
-        ${tickets
-          .map(
-            (t) => `
+    <div class="browse-results-scroll">
+      <table class="browse-results-table">
+        <thead><tr>
+          ${adminRefresh ? '<th class="ticket-refresh-col"><input type="checkbox" id="browse-select-all" title="Select all on this page" aria-label="Select all tickets on this page" /></th>' : ''}
+          <th>Badges</th>${showSystemCol ? '<th class="col-system">System</th>' : ''}<th>Ticket</th><th>Summary</th><th>Updated</th>
+        </tr></thead>
+        <tbody>
+          ${tickets
+            .map(
+              (t) => `
           <tr class="clickable" data-system="${t.system}" data-ticket="${t.ticket_number}" data-revision="${t.revision ?? '00A'}">
             ${
               adminRefresh
@@ -592,15 +593,16 @@ function renderBrowseResults(tickets, total, page, fitMap = false) {
                 : ''
             }
             <td>${badgesHtml(t.badges)}</td>
-            ${multiSystem ? `<td>${systemLabel(t.system)}</td>` : ''}
+            ${showSystemCol ? `<td class="col-system">${systemLabel(t.system)}</td>` : ''}
             <td class="mono">${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}</td>
             <td>${ticketRowLabel(t)}</td>
             <td>${t.updated_at ?? ''}</td>
           </tr>`
-          )
-          .join('')}
-      </tbody>
-    </table>`;
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>`;
 
   document.getElementById('browse-prev')?.addEventListener('click', () => {
     if (state.browsePage > 0) runBrowseSearch(state.browsePage - 1);
