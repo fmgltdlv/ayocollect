@@ -1,12 +1,30 @@
 import { Container, getContainer } from "@cloudflare/containers";
+import type { StopParams } from "@cloudflare/containers";
 
 export class ScraperContainer extends Container {
-  /** Idle shutdown when no scrape process is running (renewed while running). */
-  sleepAfter = "30m";
+  /**
+   * Keep the container DO alive while a scrape runs. Daily jobs can exceed 30m;
+   * a short timeout caused frequent alarm churn and DO storage writes at cleanup.
+   */
+  sleepAfter = "4h";
   enableInternet = true;
 
   override onStart(): void {
+    console.log("Scrape container started");
     this.renewActivityTimeout();
+  }
+
+  override onStop(params: StopParams): void {
+    console.log("Scrape container stopped", {
+      exitCode: params.exitCode,
+      reason: params.reason,
+    });
+  }
+
+  override onError(error: unknown): void {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("Container runtime error (non-fatal):", msg);
+    // Default implementation rethrows and can fail the alarm handler.
   }
 
   override async onActivityExpired(): Promise<void> {
@@ -15,8 +33,8 @@ export class ScraperContainer extends Container {
       this.renewActivityTimeout();
       return;
     }
-    console.log("Container idle, stopping");
-    await this.stop();
+    // Process already exited; the SDK alarm loop syncs stopped state.
+    console.log("Container idle after activity timeout");
   }
 }
 
