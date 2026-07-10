@@ -23,21 +23,25 @@ async function digAlertBadgeMap(
   if (!rows.length) return map;
 
   const ids = rows.map((r) => Number(r.id));
-  const placeholders = ids.map(() => '?').join(',');
-  const { results } = await db
-    .prepare(
-      `SELECT ticket_id, utility_code, utility_name, response_code, response_description, responded_at, comments
-       FROM dig_alert_responses WHERE ticket_id IN (${placeholders})`
-    )
-    .bind(...ids)
-    .all<Record<string, unknown>>();
-
   const byTicket = new Map<number, Record<string, unknown>[]>();
-  for (const row of results ?? []) {
-    const ticketId = Number(row.ticket_id);
-    const bucket = byTicket.get(ticketId);
-    if (bucket) bucket.push(row);
-    else byTicket.set(ticketId, [row]);
+
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const placeholders = chunk.map(() => '?').join(',');
+    const { results } = await db
+      .prepare(
+        `SELECT ticket_id, utility_code, utility_name, response_code, response_description, responded_at, comments
+         FROM dig_alert_responses WHERE ticket_id IN (${placeholders})`
+      )
+      .bind(...chunk)
+      .all<Record<string, unknown>>();
+
+    for (const row of results ?? []) {
+      const ticketId = Number(row.ticket_id);
+      const bucket = byTicket.get(ticketId);
+      if (bucket) bucket.push(row);
+      else byTicket.set(ticketId, [row]);
+    }
   }
 
   for (const row of rows) {
@@ -67,37 +71,41 @@ async function usanBadgeMap(
 
   const prefix = system === 'usan-ca' ? 'usan_ca' : 'usan_nv';
   const ids = rows.map((r) => Number(r.id));
-  const placeholders = ids.map(() => '?').join(',');
-
-  const [stationsResult, historyResult] = await Promise.all([
-    db
-      .prepare(
-        `SELECT ticket_id, code, name, response_code, response_description, response_date, comment
-         FROM ${prefix}_stations WHERE ticket_id IN (${placeholders})`
-      )
-      .bind(...ids)
-      .all<Record<string, unknown>>(),
-    db
-      .prepare(`SELECT ticket_id, response_code FROM ${prefix}_ticket_history WHERE ticket_id IN (${placeholders})`)
-      .bind(...ids)
-      .all<Record<string, unknown>>(),
-  ]);
-
   const stationsByTicket = new Map<number, Record<string, unknown>[]>();
-  for (const row of stationsResult.results ?? []) {
-    const ticketId = Number(row.ticket_id);
-    const bucket = stationsByTicket.get(ticketId);
-    if (bucket) bucket.push(row);
-    else stationsByTicket.set(ticketId, [row]);
-  }
-
   const historyByTicket = new Map<number, string[]>();
-  for (const row of historyResult.results ?? []) {
-    const ticketId = Number(row.ticket_id);
-    const code = row.response_code != null ? String(row.response_code) : '';
-    const bucket = historyByTicket.get(ticketId);
-    if (bucket) bucket.push(code);
-    else historyByTicket.set(ticketId, [code]);
+
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const placeholders = chunk.map(() => '?').join(',');
+
+    const [stationsResult, historyResult] = await Promise.all([
+      db
+        .prepare(
+          `SELECT ticket_id, code, name, response_code, response_description, response_date, comment
+           FROM ${prefix}_stations WHERE ticket_id IN (${placeholders})`
+        )
+        .bind(...chunk)
+        .all<Record<string, unknown>>(),
+      db
+        .prepare(`SELECT ticket_id, response_code FROM ${prefix}_ticket_history WHERE ticket_id IN (${placeholders})`)
+        .bind(...chunk)
+        .all<Record<string, unknown>>(),
+    ]);
+
+    for (const row of stationsResult.results ?? []) {
+      const ticketId = Number(row.ticket_id);
+      const bucket = stationsByTicket.get(ticketId);
+      if (bucket) bucket.push(row);
+      else stationsByTicket.set(ticketId, [row]);
+    }
+
+    for (const row of historyResult.results ?? []) {
+      const ticketId = Number(row.ticket_id);
+      const code = row.response_code != null ? String(row.response_code) : '';
+      const bucket = historyByTicket.get(ticketId);
+      if (bucket) bucket.push(code);
+      else historyByTicket.set(ticketId, [code]);
+    }
   }
 
   for (const row of rows) {

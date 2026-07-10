@@ -34,8 +34,16 @@ async function request(path, options = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) onUnauthorized();
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.status = res.status;
+    throw err;
+  }
   return data;
+}
+
+function isNotFound(err) {
+  return err?.status === 404 || /not found/i.test(String(err?.message ?? ''));
 }
 
 export const api = {
@@ -48,6 +56,26 @@ export const api = {
   browseTickets: (systems, params = {}) => {
     const q = new URLSearchParams({ ...params, systems: systems.join(',') }).toString();
     return request(`/tickets?${q}`);
+  },
+  /** Up to 400 tickets for map pins — fetched in 100-ticket pages to avoid heavy badge queries. */
+  browseMapTickets: async (systems, params = {}, maxTickets = 400) => {
+    const pageSize = 100;
+    const tickets = [];
+    for (let offset = 0; offset < maxTickets; offset += pageSize) {
+      const limit = Math.min(pageSize, maxTickets - offset);
+      const batch = await request(
+        `/tickets?${new URLSearchParams({
+          ...params,
+          systems: systems.join(','),
+          limit: String(limit),
+          offset: String(offset),
+          skipBadges: '1',
+        }).toString()}`
+      );
+      tickets.push(...(batch.tickets ?? []));
+      if ((batch.tickets?.length ?? 0) < limit) break;
+    }
+    return { tickets };
   },
   browseTicketPolygons: (tickets) =>
     request('/tickets/polygons', { method: 'POST', body: JSON.stringify({ tickets }) }),
@@ -73,14 +101,39 @@ export const api = {
   removeAdmin: (email) =>
     request(`/admin/users/${encodeURIComponent(email)}`, { method: 'DELETE' }),
   nukeTickets: () => request('/admin/nuke-tickets', { method: 'POST' }),
-  analyticsKpis: () => request('/analytics/kpis'),
-  analyticsStats: (params = {}) => {
-    const q = new URLSearchParams(params).toString();
-    return request(`/analytics/stats${q ? `?${q}` : ''}`);
+  analyticsKpis: async () => {
+    try {
+      return await request('/analytics/kpis');
+    } catch (e) {
+      if (!isNotFound(e)) throw e;
+      const summary = await request('/analytics/summary');
+      return { today: summary.today, totals: summary.totals, bySystem: summary.bySystem };
+    }
   },
-  analyticsArea: (params = {}) => {
+  analyticsStats: async (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    const qs = q ? `?${q}` : '';
+    try {
+      return await request(`/analytics/stats${qs}`);
+    } catch (e) {
+      if (!isNotFound(e)) throw e;
+      const [summary, trends] = await Promise.all([
+        request(`/analytics/summary${qs}`),
+        request(`/analytics/trends${qs}`),
+      ]);
+      return { summary, trends };
+    }
+  },
+  analyticsArea: async (params = {}) => {
     const q = new URLSearchParams({ fast: '1', ...params }).toString();
-    return request(`/analytics/area?${q}`);
+    try {
+      return await request(`/analytics/area?${q}`);
+    } catch (e) {
+      if (isNotFound(e)) {
+        throw new Error('Area insights need a backend update. Deploy the latest API worker.');
+      }
+      throw e;
+    }
   },
   analyticsSummary: (params = {}) => {
     const q = new URLSearchParams(params).toString();

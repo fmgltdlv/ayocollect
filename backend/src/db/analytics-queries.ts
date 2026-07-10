@@ -384,15 +384,6 @@ export async function getAreaAnalytics(
     await Promise.all(systems.map((system) => countTickets(db, system, params)))
   ).reduce((sum, n) => sum + n, 0);
 
-  if (ticketCount > MAX_AREA_TICKETS) {
-    const err = new Error(
-      `Area contains ${ticketCount} tickets — draw a smaller rectangle (max ${MAX_AREA_TICKETS}).`
-    ) as Error & { ticketCount: number; code: string };
-    err.ticketCount = ticketCount;
-    err.code = 'AREA_TOO_LARGE';
-    throw err;
-  }
-
   const today = todayIso();
   const bySystem = await Promise.all(systems.map((system) => areaSystemKpis(db, system, today, params)));
 
@@ -405,17 +396,25 @@ export async function getAreaAnalytics(
     totals.late += row.badges.late;
   }
 
-  const candidates = await loadTicketCandidatesWithFilters(db, systems, params, MAX_AREA_TICKETS + 1);
-  const overlapResult = findOverlapsInArea(candidates, {
-    limit: opts.limit ?? 20,
-    bboxOnly: opts.bboxOnly ?? true,
-  });
+  const tooLarge = ticketCount > MAX_AREA_TICKETS;
+  let overlaps = null;
+  if (!tooLarge) {
+    const candidates = await loadTicketCandidatesWithFilters(db, systems, params, MAX_AREA_TICKETS + 1);
+    overlaps = findOverlapsInArea(candidates, {
+      limit: opts.limit ?? 20,
+      bboxOnly: opts.bboxOnly ?? true,
+    });
+  }
 
   return {
     today,
     ticketCount,
     totals,
     bySystem,
-    overlaps: overlapResult,
+    overlaps,
+    overlapsSkipped: tooLarge,
+    overlapsNote: tooLarge
+      ? `Area has ${ticketCount.toLocaleString()} tickets — overlap hotspots are skipped above ${MAX_AREA_TICKETS}. Draw a smaller box to see overlaps.`
+      : undefined,
   };
 }

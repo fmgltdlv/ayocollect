@@ -708,6 +708,11 @@ function renderAreaInsightsPanel() {
       </tbody>
     </table>
     ${
+      area.overlapsSkipped
+        ? `<p class="banner">${escapeHtml(area.overlapsNote ?? 'Area too large for overlap analysis — draw a smaller box.')}</p>`
+        : ''
+    }
+    ${
       hotspots.length
         ? `<h4 class="analytics-subheading">Overlap hotspots</h4>
       <table>
@@ -727,7 +732,9 @@ function renderAreaInsightsPanel() {
         </tbody>
       </table>
       <p class="muted">${area.overlaps.totalPairs.toLocaleString()} overlap pair(s), ${area.overlaps.concurrentPairs.toLocaleString()} concurrent</p>`
-        : '<p class="muted">No qualifying overlaps in this area.</p>'
+        : area.overlapsSkipped
+          ? ''
+          : '<p class="muted">No qualifying overlaps in this area.</p>'
     }`;
 
   el.querySelectorAll('.area-hotspot-row').forEach((tr) => {
@@ -1271,7 +1278,7 @@ async function runBrowseSearch(page = 0) {
 
     const listPromise = api.browseTickets(systems, params);
     const mapPromise = hasBbox
-      ? api.browseTickets(systems, { ...state.browseParams, limit: 400, offset: 0 })
+      ? api.browseMapTickets(systems, state.browseParams).catch((e) => ({ tickets: [], _error: e.message }))
       : null;
     const areaPromise = hasBbox ? api.analyticsArea(areaParams).catch((e) => ({ error: e.message })) : null;
 

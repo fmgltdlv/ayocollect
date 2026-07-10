@@ -410,8 +410,9 @@ app.get('/api/tickets', async (c) => {
     return c.json({ error: 'At least one system required (systems=digalert,usan-ca,usan-nv)' }, 400);
   }
   const params = listQuery(c);
+  const skipBadges = c.req.query('skipBadges') === '1';
   const { tickets: rows, total, limit, offset } = await listTicketsMulti(c.env.DB, systems, params);
-  const tickets = await enrichListWithBadges(c.env.DB, systems[0], rows);
+  const tickets = skipBadges ? rows : await enrichListWithBadges(c.env.DB, systems[0], rows);
   return c.json({ tickets, total, limit, offset });
 });
 
@@ -490,10 +491,6 @@ app.get('/api/analytics/area', async (c) => {
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const ticketCount = e && typeof e === 'object' && 'ticketCount' in e ? (e as { ticketCount: number }).ticketCount : undefined;
-    if (ticketCount !== undefined) {
-      return c.json({ error: msg, ticketCount, code: 'AREA_TOO_LARGE' }, 400);
-    }
     return c.json({ error: msg }, 400);
   }
 });
