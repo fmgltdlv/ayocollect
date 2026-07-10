@@ -907,25 +907,9 @@ tr.clickable td.ticket-refresh-col {
 .kpi-blocker { color: var(--blocker); }
 .kpi-late { color: var(--late); }
 
-.browse-kpi-panel {
-  margin-bottom: 0.75rem;
-}
-
-.browse-kpi-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.browse-kpi-grid {
-  flex: 1;
-  margin-top: 0;
-}
-
-.browse-kpi-note {
-  margin: 0.5rem 0 0;
+.browse-stats-hint {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
 }
 
 .browse-area-kpi {

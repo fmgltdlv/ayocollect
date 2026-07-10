@@ -195,11 +195,16 @@ export function badgesHtml(badges) {
 
 export function parseWktToLatLngs(wkt) {
   if (!wkt) return [];
-  const m = wkt.match(/POLYGON\s*\(\(([^)]+)\)\)/i);
-  if (!m) return [];
-  return m[1].split(',').map((pair) => {
-    const [lon, lat] = pair.trim().split(/\s+/).map(Number);
-    return [lat, lon];
+  const normalized = String(wkt).replace(/\s+/g, ' ').trim();
+  const match =
+    normalized.match(/POLYGON\s*\(\s*\(\s*([^)]+)\s*\)/i) ||
+    normalized.match(/MULTIPOLYGON\s*\(\s*\(\s*\(\s*([^)]+)\s*\)/i);
+  if (!match) return [];
+  return match[1].split(',').flatMap((pair) => {
+    const parts = pair.trim().split(/\s+/).map(Number);
+    if (parts.length < 2 || Number.isNaN(parts[0]) || Number.isNaN(parts[1])) return [];
+    const [lon, lat] = parts;
+    return [[lat, lon]];
   });
 }
 

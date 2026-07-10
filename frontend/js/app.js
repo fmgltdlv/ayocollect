@@ -44,7 +44,6 @@ let state = {
   browseMapMode: null,
   browsePageTickets: [],
   browseMapTickets: [],
-  browseKpis: null,
   browseAreaInsights: null,
   browseAreaError: null,
   browsePolygonByKey: {},
@@ -649,14 +648,38 @@ function browseMapTicketSource() {
   return state.browsePageTickets;
 }
 
-function kpiCardsHtml(totals) {
+function kpiCardsHtml(totals, labels = {}) {
   const t = totals;
+  const totalLabel = labels.total ?? 'Total stored';
   return `
     <div class="kpi-card"><span class="kpi-label">Active</span><span class="kpi-value">${t.active.toLocaleString()}</span></div>
     <div class="kpi-card"><span class="kpi-label">Pending</span><span class="kpi-value kpi-pending">${t.pending.toLocaleString()}</span></div>
     <div class="kpi-card"><span class="kpi-label">Blockers</span><span class="kpi-value kpi-blocker">${t.blockers.toLocaleString()}</span></div>
     <div class="kpi-card"><span class="kpi-label">Late</span><span class="kpi-value kpi-late">${t.late.toLocaleString()}</span></div>
-    <div class="kpi-card"><span class="kpi-label">Total stored</span><span class="kpi-value">${t.total.toLocaleString()}</span></div>`;
+    <div class="kpi-card"><span class="kpi-label">${totalLabel}</span><span class="kpi-value">${t.total.toLocaleString()}</span></div>`;
+}
+
+function statsQueryFromBrowse() {
+  const systems = browseSystemsFromDom();
+  const startDate = document.getElementById('start-date')?.value ?? '';
+  const endDate = document.getElementById('end-date')?.value ?? '';
+  return { systems, startDate, endDate };
+}
+
+function statsQueryError({ systems, startDate, endDate }) {
+  if (systems.length !== 1) return 'Select exactly one system, then click Stats.';
+  if (!startDate || !endDate) return 'Set a From and To date range, then click Stats.';
+  return null;
+}
+
+function statsTotalsFromSystem(row) {
+  return {
+    active: row.active,
+    pending: row.badges.pending,
+    blockers: row.badges.blocker,
+    late: row.badges.late,
+    total: row.total,
+  };
 }
 
 function renderAreaInsightsPanel() {
@@ -745,58 +768,67 @@ function renderAreaInsightsPanel() {
 }
 
 async function openStatsModal() {
+  const query = statsQueryFromBrowse();
+  const validationError = statsQueryError(query);
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
-  backdrop.innerHTML = `<div class="modal modal-wide"><h2>Fleet stats</h2><p class="muted">Loadingâ€¦</p><button class="btn-secondary close-modal" type="button">Close</button></div>`;
+  backdrop.innerHTML = `<div class="modal modal-wide"><h2>Stats</h2><p class="muted">Loading…</p><button class="btn-secondary close-modal" type="button">Close</button></div>`;
   document.body.appendChild(backdrop);
   backdrop.querySelector('.close-modal').addEventListener('click', () => backdrop.remove());
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) backdrop.remove();
   });
 
-  try {
-    const { summary, trends } = await api.analyticsStats();
-    const t = summary.totals;
+  if (validationError) {
     backdrop.querySelector('.modal').innerHTML = `
-      <h2>Fleet stats</h2>
-      <p class="muted">As of ${escapeHtml(summary.today)}</p>
-      <div class="kpi-grid">${kpiCardsHtml(t)}</div>
+      <h2>Stats</h2>
+      <p class="banner">${escapeHtml(validationError)}</p>
+      <p class="muted">Stats use the current system and date filters from Browse.</p>
+      <button class="btn-secondary close-modal" type="button">Close</button>`;
+    backdrop.querySelector('.close-modal').addEventListener('click', () => backdrop.remove());
+    return;
+  }
+
+  const system = query.systems[0];
+  const params = {
+    systems: system,
+    startDate: query.startDate,
+    endDate: query.endDate,
+  };
+
+  try {
+    const { summary, trends } = await api.analyticsStats(params);
+    const row = summary.bySystem[0];
+    if (!row) throw new Error('No stats returned for this system and date range.');
+    const totals = statsTotalsFromSystem(row);
+    const trendRows = trends.trend.length ? trends.trend : [{ date: '—' }];
+    const trendLabel = systemLabel(system);
+
+    backdrop.querySelector('.modal').innerHTML = `
+      <h2>${escapeHtml(systemLabel(system))} stats</h2>
+      <p class="muted">${escapeHtml(query.startDate)} – ${escapeHtml(query.endDate)} · active = work window includes today</p>
+      <div class="kpi-grid">${kpiCardsHtml(totals, { total: 'In date range' })}</div>
       <div class="analytics-grid">
         <div class="panel">
-          <h3>By system</h3>
+          <h3>Summary</h3>
           <table>
-            <thead><tr><th>System</th><th>Total</th><th>Active</th><th>Pending</th><th>Blockers</th><th>Late</th><th>Geometry</th></tr></thead>
             <tbody>
-              ${summary.bySystem
-                .map(
-                  (s) => `
-                <tr>
-                  <td>${systemLabel(s.system)}</td>
-                  <td>${s.total.toLocaleString()}</td>
-                  <td>${s.active.toLocaleString()}</td>
-                  <td>${s.badges.pending.toLocaleString()}</td>
-                  <td>${s.badges.blocker.toLocaleString()}</td>
-                  <td>${s.badges.late.toLocaleString()}</td>
-                  <td>${s.geometryCoveragePct}%</td>
-                </tr>`
-                )
-                .join('')}
+              <tr><th scope="row">Geometry coverage</th><td>${row.geometryCoveragePct}%</td></tr>
+              <tr><th scope="row">With polygon</th><td>${row.withPolygon.toLocaleString()}</td></tr>
             </tbody>
           </table>
         </div>
         <div class="panel">
-          <h3>Ingest trend (30 days)</h3>
+          <h3>Updates in range</h3>
           <table>
-            <thead><tr><th>Date</th><th>Dig Alert</th><th>USAN CA</th><th>USAN NV</th></tr></thead>
+            <thead><tr><th>Date</th><th>${escapeHtml(trendLabel)}</th></tr></thead>
             <tbody>
-              ${(trends.trend.length ? trends.trend.slice(-14) : [{ date: 'â€”' }])
+              ${trendRows
                 .map(
-                  (row) => `
+                  (trendRow) => `
                 <tr>
-                  <td>${escapeHtml(row.date)}</td>
-                  <td>${row.digalert ?? 0}</td>
-                  <td>${row['usan-ca'] ?? 0}</td>
-                  <td>${row['usan-nv'] ?? 0}</td>
+                  <td>${escapeHtml(trendRow.date)}</td>
+                  <td>${trendRow[system] ?? 0}</td>
                 </tr>`
                 )
                 .join('')}
@@ -804,38 +836,43 @@ async function openStatsModal() {
           </table>
         </div>
       </div>
-      ${summary.bySystem
-        .map(
-          (s) => `
-        <div class="panel">
-          <h3>${systemLabel(s.system)} â€” top work types</h3>
-          <table>
-            <thead><tr><th>Type</th><th>Count</th></tr></thead>
-            <tbody>
-              ${(s.workTypes.length ? s.workTypes : [{ label: 'â€”', count: 0 }])
-                .map((w) => `<tr><td>${escapeHtml(w.label)}</td><td>${w.count.toLocaleString()}</td></tr>`)
-                .join('')}
-            </tbody>
-          </table>
-        </div>`
-        )
-        .join('')}
-      ${
-        summary.ingestHealth?.recentJobs?.length
-          ? `<div class="panel">
-        <h3>Recent fetch jobs</h3>
+      <div class="panel">
+        <h3>Top work types</h3>
         <table>
-          <thead><tr><th>ID</th><th>Status</th><th>Errors</th><th>Updated</th></tr></thead>
+          <thead><tr><th>Type</th><th>Count</th></tr></thead>
           <tbody>
-            ${summary.ingestHealth.recentJobs
+            ${(row.workTypes.length ? row.workTypes : [{ label: '—', count: 0 }])
+              .map((w) => `<tr><td>${escapeHtml(w.label)}</td><td>${w.count.toLocaleString()}</td></tr>`)
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+      ${
+        row.geography?.length
+          ? `<div class="panel">
+        <h3>Top places</h3>
+        <table>
+          <thead><tr><th>Place</th><th>Count</th></tr></thead>
+          <tbody>
+            ${row.geography
+              .map((g) => `<tr><td>${escapeHtml(g.label)}</td><td>${g.count.toLocaleString()}</td></tr>`)
+              .join('')}
+          </tbody>
+        </table>
+      </div>`
+          : ''
+      }
+      ${
+        row.fetchStatus && Object.keys(row.fetchStatus).length
+          ? `<div class="panel">
+        <h3>Fetch status</h3>
+        <table>
+          <thead><tr><th>Status</th><th>Count</th></tr></thead>
+          <tbody>
+            ${Object.entries(row.fetchStatus)
               .map(
-                (j) => `
-              <tr>
-                <td>${j.id}</td>
-                <td>${escapeHtml(String(j.status ?? ''))}</td>
-                <td>${j.error_count ?? 0}</td>
-                <td>${escapeHtml(String(j.updated_at ?? ''))}</td>
-              </tr>`
+                ([status, count]) =>
+                  `<tr><td>${escapeHtml(status)}</td><td>${Number(count).toLocaleString()}</td></tr>`
               )
               .join('')}
           </tbody>
@@ -847,38 +884,15 @@ async function openStatsModal() {
     backdrop.querySelector('.close-modal').addEventListener('click', () => backdrop.remove());
   } catch (e) {
     backdrop.querySelector('.modal').innerHTML = `
-      <h2>Fleet stats</h2><p class="error">${escapeHtml(e.message)}</p>
+      <h2>Stats</h2><p class="error">${escapeHtml(e.message)}</p>
       <button class="btn-secondary close-modal" type="button">Close</button>`;
     backdrop.querySelector('.close-modal').addEventListener('click', () => backdrop.remove());
-  }
-}
-
-async function loadBrowseKpis() {
-  try {
-    state.browseKpis = await api.analyticsKpis();
-    const strip = document.getElementById('browse-kpi-strip');
-    if (strip && state.browseKpis) {
-      strip.innerHTML = kpiCardsHtml(state.browseKpis.totals);
-    }
-    const note = document.getElementById('browse-kpi-note');
-    if (note && state.browseKpis) {
-      note.textContent = `Fleet-wide as of ${state.browseKpis.today} Â· active = work window includes today`;
-    }
-  } catch {
-    /* KPI strip optional */
   }
 }
 
 function renderBrowse() {
   const { startDate = '', endDate = '', ticketNumber = '' } = state.browseParams;
   app.innerHTML = `
-    <div class="panel browse-kpi-panel">
-      <div class="browse-kpi-header">
-        <div id="browse-kpi-strip" class="kpi-grid browse-kpi-grid">${state.browseKpis ? kpiCardsHtml(state.browseKpis.totals) : '<span class="muted">Loading KPIsâ€¦</span>'}</div>
-        <button class="btn btn-secondary btn-sm" id="browse-stats-btn" type="button">Stats</button>
-      </div>
-      <p id="browse-kpi-note" class="muted browse-kpi-note">${state.browseKpis ? `Fleet-wide as of ${state.browseKpis.today}` : ''}</p>
-    </div>
     <div class="panel browse-panel">
       <h2 class="panel-heading">Browse tickets</h2>
       <div class="browse-toolbar">
@@ -895,7 +909,7 @@ function renderBrowse() {
             <span class="filter-label">Date range</span>
             <div class="date-range">
               <label class="field-inline"><span>From</span><input type="date" id="start-date" value="${startDate}" /></label>
-              <span class="date-sep" aria-hidden="true">â€“</span>
+              <span class="date-sep" aria-hidden="true">–</span>
               <label class="field-inline"><span>To</span><input type="date" id="end-date" value="${endDate}" /></label>
             </div>
           </div>
@@ -906,8 +920,10 @@ function renderBrowse() {
             </div>
             <div class="filter-actions-inline">
               <button class="btn" id="search-btn" type="button">Search</button>
+              <button class="btn btn-secondary" id="browse-stats-btn" type="button">Stats</button>
             </div>
           </div>
+          <p class="muted browse-stats-hint">Stats: select one system and a date range, then click Stats.</p>
           <div class="filter-group">
             <span class="filter-label">Badges</span>
             <div class="chip-group">
@@ -932,7 +948,6 @@ function renderBrowse() {
 
   setTimeout(() => {
     initSearchMap();
-    void loadBrowseKpis();
     runBrowseSearch(0);
     state.searchMap?.invalidateSize();
   }, 0);
@@ -1701,29 +1716,62 @@ function onDetailModalKeydown(e) {
   if (e.key === 'Escape') closeDetailModal();
 }
 
+function ticketMapBounds(ticket, latlngs) {
+  if (latlngs?.length >= 3) {
+    try {
+      const bounds = L.polygon(latlngs).getBounds();
+      if (bounds.isValid()) return bounds;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (
+    ticket?.bbox_min_lat != null &&
+    ticket?.bbox_max_lat != null &&
+    ticket?.bbox_min_lon != null &&
+    ticket?.bbox_max_lon != null
+  ) {
+    const bounds = L.latLngBounds(
+      [Number(ticket.bbox_min_lat), Number(ticket.bbox_min_lon)],
+      [Number(ticket.bbox_max_lat), Number(ticket.bbox_max_lon)]
+    );
+    if (bounds.isValid()) return bounds;
+  }
+  if (ticket?.centroid_y != null && ticket?.centroid_x != null) {
+    const center = L.latLng(Number(ticket.centroid_y), Number(ticket.centroid_x));
+    return L.latLngBounds(center, center);
+  }
+  return null;
+}
+
 function waitForDetailMapLayout(map) {
   return new Promise((resolve) => {
     map.invalidateSize();
     requestAnimationFrame(() => {
       map.invalidateSize();
-      requestAnimationFrame(resolve);
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          map.invalidateSize();
+          resolve();
+        }, 50);
+      });
     });
   });
 }
 
-function fitDetailMapToTicketLayers(map, ticketLayers) {
-  const boundsLayers = ticketLayers.filter((layer) => {
+function fitDetailMapToTicketLayers(map, ticketLayers, ticket, latlngs) {
+  let bounds = null;
+  if (ticketLayers.length) {
     try {
-      return layer.getBounds?.().isValid?.();
+      const layerBounds = L.featureGroup(ticketLayers).getBounds();
+      if (layerBounds?.isValid?.()) bounds = layerBounds;
     } catch {
-      return false;
+      /* fall through */
     }
-  });
-  if (!boundsLayers.length) return;
-
-  const bounds = L.featureGroup(boundsLayers).getBounds();
-  if (!bounds.isValid()) return;
-  map.fitBounds(bounds.pad(0.12), { maxZoom: DETAIL_MAP_MAX_ZOOM });
+  }
+  if (!bounds) bounds = ticketMapBounds(ticket, latlngs);
+  if (!bounds?.isValid?.()) return;
+  map.fitBounds(bounds.pad(0.12), { padding: [24, 24], maxZoom: DETAIL_MAP_MAX_ZOOM });
 }
 
 function raiseTicketLayers(ticketLayers) {
@@ -1865,7 +1913,16 @@ function renderDetail() {
     const utilityStatusEl = body.querySelector('#detail-utility-status');
     const legendEl = body.querySelector('#detail-map-legend');
 
-    state.detailMap = L.map(mapEl, { maxZoom: DETAIL_MAP_MAX_ZOOM }).setView([36.16, -115.15], 12);
+    const cachedPolygonWkt =
+      state.browsePolygonByKey[
+        ticketPolygonKey({ system, ticket_number: t.ticket_number, revision: t.revision })
+      ];
+    const latlngs = parseWktToLatLngs(t.polygon_wkt || cachedPolygonWkt);
+    const ticketBounds = ticketMapBounds(t, latlngs);
+    const initialCenter = ticketBounds ? ticketBounds.getCenter() : L.latLng(36.16, -115.15);
+    const initialZoom = ticketBounds ? 15 : 9;
+
+    state.detailMap = L.map(mapEl, { maxZoom: DETAIL_MAP_MAX_ZOOM }).setView(initialCenter, initialZoom);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: 'Â© OpenStreetMap',
       maxNativeZoom: DETAIL_MAP_TILE_NATIVE_MAX_ZOOM,
@@ -1875,14 +1932,23 @@ function renderDetail() {
     state.detailUtilityGroup = L.featureGroup().addTo(state.detailMap);
 
     const ticketLayers = [];
-    const latlngs = parseWktToLatLngs(t.polygon_wkt);
+    const primaryTicketLayers = [];
     if (latlngs.length) {
       const poly = L.polygon(latlngs, { color: '#3b82f6', weight: 3, fillOpacity: 0.25 }).addTo(
         state.detailMap
       );
       ticketLayers.push(poly);
+      primaryTicketLayers.push(poly);
+    } else if (ticketBounds && t.bbox_min_lat != null && t.bbox_max_lat != null) {
+      const rect = L.rectangle(ticketBounds, { color: '#3b82f6', weight: 3, fillOpacity: 0.25 }).addTo(
+        state.detailMap
+      );
+      ticketLayers.push(rect);
+      primaryTicketLayers.push(rect);
     } else if (t.centroid_y && t.centroid_x) {
-      ticketLayers.push(L.marker([t.centroid_y, t.centroid_x]).addTo(state.detailMap));
+      const marker = L.marker([t.centroid_y, t.centroid_x]).addTo(state.detailMap);
+      ticketLayers.push(marker);
+      primaryTicketLayers.push(marker);
     }
 
     for (const o of overlaps.slice(0, 20)) {
@@ -1902,7 +1968,7 @@ function renderDetail() {
     }
 
     await waitForDetailMapLayout(state.detailMap);
-    fitDetailMapToTicketLayers(state.detailMap, ticketLayers);
+    fitDetailMapToTicketLayers(state.detailMap, primaryTicketLayers, t, latlngs);
 
     const queryBbox = ticketQueryBbox(t, latlngs);
     if (queryBbox) {
@@ -1942,7 +2008,7 @@ function renderDetail() {
     }
 
     await waitForDetailMapLayout(state.detailMap);
-    fitDetailMapToTicketLayers(state.detailMap, ticketLayers);
+    fitDetailMapToTicketLayers(state.detailMap, primaryTicketLayers, t, latlngs);
     state.detailMap.invalidateSize();
   }, 0);
 }

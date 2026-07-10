@@ -85,54 +85,94 @@ export async function getGlobalKpis(db: D1Database) {
 export async function getAnalyticsStatsBundle(db: D1Database, params: AnalyticsParams = {}) {
   const [summary, trends] = await Promise.all([
     getAnalyticsSummary(db, params),
-    getAnalyticsTrends(db, 30, params.systems),
+    getAnalyticsTrends(db, 30, params.systems, params),
   ]);
   return { summary, trends };
 }
 
 async function systemCounts(db: D1Database, system: TicketSystem, today: string, params: AnalyticsParams) {
   const table = tableForSystem(system);
-  const total = await countWhere(db, `SELECT COUNT(*) AS n FROM ${table}`);
-  const active = await countWhere(db, `SELECT COUNT(*) AS n FROM ${table} WHERE ${activeWhere(system, today)}`);
-  const withPolygon = await countWhere(
-    db,
-    `SELECT COUNT(*) AS n FROM ${table} WHERE polygon_wkt IS NOT NULL AND polygon_wkt != ''`
-  );
+  const hasDateFilter = !!(params.startDate || params.endDate);
+  const filterParams: BrowseListParams = {
+    startDate: params.startDate,
+    endDate: params.endDate,
+  };
+  const activeExtra = activeWhere(system, today);
+
+  let total: number;
+  let active: number;
+  let withPolygon: number;
+  let badges: Record<BadgeFilter, number>;
+
+  if (hasDateFilter) {
+    total = await countTickets(db, system, filterParams);
+    active = await countFiltered(db, system, filterParams, [activeExtra]);
+    withPolygon = await countFiltered(db, system, filterParams, [
+      `polygon_wkt IS NOT NULL AND polygon_wkt != ''`,
+    ]);
+    badges = {
+      pending: await countFiltered(db, system, filterParams, [
+        activeExtra,
+        buildBadgeCondition(system, 'pending'),
+      ]),
+      blocker: await countFiltered(db, system, filterParams, [
+        activeExtra,
+        buildBadgeCondition(system, 'blocker'),
+      ]),
+      late: await countFiltered(db, system, filterParams, [buildBadgeCondition(system, 'late')]),
+    };
+  } else {
+    total = await countWhere(db, `SELECT COUNT(*) AS n FROM ${table}`);
+    active = await countWhere(db, `SELECT COUNT(*) AS n FROM ${table} WHERE ${activeExtra}`);
+    withPolygon = await countWhere(
+      db,
+      `SELECT COUNT(*) AS n FROM ${table} WHERE polygon_wkt IS NOT NULL AND polygon_wkt != ''`
+    );
+    badges = {
+      pending: await countWhere(db, badgeCountSql(system, 'pending', activeExtra)),
+      blocker: await countWhere(db, badgeCountSql(system, 'blocker', activeExtra)),
+      late: await countWhere(db, badgeCountSql(system, 'late', activeExtra)),
+    };
+  }
 
   const dateWhere = dateRangeWhere(system, params.startDate, params.endDate);
   const rangeTotal = dateWhere
     ? await countWhere(db, `SELECT COUNT(*) AS n FROM ${table} WHERE ${dateWhere}`)
     : total;
 
-  const badges: Record<BadgeFilter, number> = {
-    pending: await countWhere(db, badgeCountSql(system, 'pending', activeWhere(system, today))),
-    blocker: await countWhere(db, badgeCountSql(system, 'blocker', activeWhere(system, today))),
-    late: await countWhere(db, badgeCountSql(system, 'late', activeWhere(system, today))),
-  };
-
+  const workTypeFilter = mergeFilterWhere(system, filterParams, [
+    'work_type IS NOT NULL',
+    "work_type != ''",
+  ]);
   const { results: workTypes } = await db
     .prepare(
-      `SELECT work_type AS label, COUNT(*) AS count FROM ${table}
-       WHERE work_type IS NOT NULL AND work_type != ''
+      `SELECT work_type AS label, COUNT(*) AS count FROM ${table} ${workTypeFilter.where}
        GROUP BY work_type ORDER BY count DESC LIMIT 10`
     )
+    .bind(...workTypeFilter.binds)
     .all<{ label: string; count: number }>();
 
   let geography: { label: string; count: number }[] = [];
   if (system === 'digalert') {
+    const geoFilter = mergeFilterWhere(system, filterParams);
     const { results } = await db
       .prepare(
-        `SELECT COALESCE(place, county, 'Unknown') AS label, COUNT(*) AS count FROM ${table}
+        `SELECT COALESCE(place, county, 'Unknown') AS label, COUNT(*) AS count FROM ${table} ${geoFilter.where}
          GROUP BY label ORDER BY count DESC LIMIT 10`
       )
+      .bind(...geoFilter.binds)
       .all<{ label: string; count: number }>();
     geography = results ?? [];
   }
 
   const fetchStatus: Record<string, number> = {};
   if (system !== 'digalert') {
+    const statusFilter = mergeFilterWhere(system, filterParams);
     const { results: statusRows } = await db
-      .prepare(`SELECT COALESCE(fetch_status, 'unknown') AS status, COUNT(*) AS count FROM ${table} GROUP BY status`)
+      .prepare(
+        `SELECT COALESCE(fetch_status, 'unknown') AS status, COUNT(*) AS count FROM ${table} ${statusFilter.where} GROUP BY status`
+      )
+      .bind(...statusFilter.binds)
       .all<{ status: string; count: number }>();
     for (const row of statusRows ?? []) {
       fetchStatus[row.status] = row.count;
@@ -203,23 +243,38 @@ export async function getAnalyticsSummary(db: D1Database, params: AnalyticsParam
   };
 }
 
-export async function getAnalyticsTrends(db: D1Database, days = 30, systems?: TicketSystem[]) {
+export async function getAnalyticsTrends(
+  db: D1Database,
+  days = 30,
+  systems?: TicketSystem[],
+  params: AnalyticsParams = {}
+) {
   const selected = systems?.length ? systems : ALL_SYSTEMS;
-  const cutoff = new Date();
-  cutoff.setUTCDate(cutoff.getUTCDate() - days);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  let startBound: string;
+  let endBound: string | undefined;
+
+  if (params.startDate) {
+    startBound = params.startDate;
+    endBound = params.endDate;
+  } else {
+    const cutoff = new Date();
+    cutoff.setUTCDate(cutoff.getUTCDate() - days);
+    startBound = cutoff.toISOString().slice(0, 10);
+  }
 
   const byDate = new Map<string, Record<string, number>>();
 
   for (const system of selected) {
     const table = tableForSystem(system);
-    const { results } = await db
-      .prepare(
-        `SELECT date(updated_at) AS day, COUNT(*) AS count FROM ${table}
-         WHERE updated_at >= ? GROUP BY day ORDER BY day ASC`
-      )
-      .bind(cutoffStr)
-      .all<{ day: string; count: number }>();
+    const sql = endBound
+      ? `SELECT date(updated_at) AS day, COUNT(*) AS count FROM ${table}
+         WHERE date(updated_at) >= ? AND date(updated_at) <= ? GROUP BY day ORDER BY day ASC`
+      : `SELECT date(updated_at) AS day, COUNT(*) AS count FROM ${table}
+         WHERE updated_at >= ? GROUP BY day ORDER BY day ASC`;
+    const stmt = db.prepare(sql);
+    const { results } = endBound
+      ? await stmt.bind(startBound, endBound).all<{ day: string; count: number }>()
+      : await stmt.bind(startBound).all<{ day: string; count: number }>();
 
     for (const row of results ?? []) {
       const entry = byDate.get(row.day) ?? {};
@@ -232,7 +287,13 @@ export async function getAnalyticsTrends(db: D1Database, days = 30, systems?: Ti
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, counts]) => ({ date, ...counts }));
 
-  return { days, cutoff: cutoffStr, trend };
+  return {
+    days: endBound ? undefined : days,
+    startDate: startBound,
+    endDate: endBound,
+    cutoff: startBound,
+    trend,
+  };
 }
 
 export type OverlapHotspot = {
