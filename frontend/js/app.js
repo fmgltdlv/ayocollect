@@ -1724,7 +1724,7 @@ function renderDetail() {
         <h3>Ticket info</h3>
         <div class="ticket-info">${ticketInfoHtml(system, t)}</div>
         <h3 class="detail-subheading">Overlapping tickets (${overlapCount})</h3>
-        <p class="muted overlap-note">Only tickets filed on different days are counted (same-day tickets are usually from the same caller).</p>
+        <p class="muted overlap-note">Overlaps count when filed by different creators, or when start dates are more than 30 days apart. Same creator within 30 days is excluded.</p>
         ${
           overlaps.length
             ? `<table>

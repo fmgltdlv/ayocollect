@@ -2,7 +2,7 @@ import booleanIntersects from '@turf/boolean-intersects';
 import {
   CANDIDATE_CAP,
   canonicalPair,
-  createdOnDifferentDays,
+  shouldCountAsOverlap,
   findOverlapCandidates,
   loadTicketCandidate,
   listTicketsForRebuild,
@@ -112,7 +112,7 @@ export async function recomputeOverlapsForTicket(db: D1Database, ref: TicketRef)
   let count = 0;
 
   for (const candidate of candidates.slice(0, CANDIDATE_CAP)) {
-    if (!createdOnDifferentDays(source, candidate)) continue;
+    if (!shouldCountAsOverlap(source, candidate)) continue;
 
     const kind = overlapKind(source, candidate);
     if (!kind) continue;
@@ -237,7 +237,7 @@ export async function runOverlapMaintenance(db: D1Database): Promise<{ refreshed
   let refreshed = 0;
   let pruned = 0;
 
-  pruned += await pruneSameDayOverlaps(db);
+  pruned += await pruneExcludedOverlaps(db);
 
   const { results: rows } = await db
     .prepare('SELECT id, a_system, a_number, a_revision, b_system, b_number, b_revision, concurrent FROM ticket_overlaps WHERE concurrent = 1 LIMIT 500')
@@ -289,7 +289,7 @@ export async function runOverlapMaintenance(db: D1Database): Promise<{ refreshed
   return { refreshed, pruned };
 }
 
-async function pruneSameDayOverlaps(db: D1Database): Promise<number> {
+async function pruneExcludedOverlaps(db: D1Database): Promise<number> {
   const { results } = await db
     .prepare('SELECT id, a_system, a_number, a_revision, b_system, b_number, b_revision FROM ticket_overlaps LIMIT ?')
     .bind(PRUNE_BATCH)
@@ -316,7 +316,7 @@ async function pruneSameDayOverlaps(db: D1Database): Promise<number> {
       revision: row.b_revision,
     });
     if (!a || !b) continue;
-    if (!createdOnDifferentDays(a, b)) {
+    if (!shouldCountAsOverlap(a, b)) {
       await db.prepare('DELETE FROM ticket_overlaps WHERE id = ?').bind(row.id).run();
       pruned++;
     }
