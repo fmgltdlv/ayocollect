@@ -57,26 +57,17 @@ export const api = {
     const q = new URLSearchParams({ ...params, systems: systems.join(',') }).toString();
     return request(`/tickets?${q}`);
   },
-  /** Up to 400 tickets for map pins — fetched in 100-ticket pages to avoid heavy badge queries. */
-  browseMapTickets: async (systems, params = {}, maxTickets = 400) => {
-    const pageSize = 100;
-    const tickets = [];
-    for (let offset = 0; offset < maxTickets; offset += pageSize) {
-      const limit = Math.min(pageSize, maxTickets - offset);
-      const batch = await request(
-        `/tickets?${new URLSearchParams({
-          ...params,
-          systems: systems.join(','),
-          limit: String(limit),
-          offset: String(offset),
-          skipBadges: '1',
-        }).toString()}`
-      );
-      tickets.push(...(batch.tickets ?? []));
-      if ((batch.tickets?.length ?? 0) < limit) break;
-    }
-    return { tickets };
-  },
+  /** One page of map tickets (default 400) — skipBadges keeps bbox queries light. */
+  browseMapTickets: (systems, params = {}, { limit = 400, offset = 0 } = {}) =>
+    request(
+      `/tickets?${new URLSearchParams({
+        ...params,
+        systems: systems.join(','),
+        limit: String(limit),
+        offset: String(offset),
+        skipBadges: '1',
+      }).toString()}`
+    ),
   browseTicketPolygons: (tickets) =>
     request('/tickets/polygons', { method: 'POST', body: JSON.stringify({ tickets }) }),
   getTicket: (system, ticketNumber, revision) => {

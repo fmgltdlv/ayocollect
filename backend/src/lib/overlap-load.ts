@@ -54,3 +54,30 @@ export async function loadTicketCandidatesWithFilters(
 
   return candidates;
 }
+
+/** Load every ticket in the filtered area (all systems) for overlap analysis. */
+export async function loadAllTicketCandidatesWithFilters(
+  db: D1Database,
+  systems: TicketSystem[],
+  params: BrowseListParams
+): Promise<TicketCandidate[]> {
+  const candidates: TicketCandidate[] = [];
+
+  for (const system of systems) {
+    const table = tableForSystem(system);
+    const { where, binds } = buildListConditions(system, params);
+    const extra = where ? `${where} AND bbox_min_lon IS NOT NULL` : 'WHERE bbox_min_lon IS NOT NULL';
+    const select = system === 'digalert' ? digAlertSelect() : usanSelect();
+
+    const { results } = await db
+      .prepare(`SELECT ${select} FROM ${table} ${extra}`)
+      .bind(...binds)
+      .all<Record<string, unknown>>();
+
+    for (const row of results ?? []) {
+      candidates.push(system === 'digalert' ? mapDigAlertRow(row) : mapUsanRow(system, row));
+    }
+  }
+
+  return candidates;
+}

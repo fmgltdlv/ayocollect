@@ -920,6 +920,34 @@ tr.clickable td.ticket-refresh-col {
   margin-bottom: 1rem;
 }
 
+.area-hotspots-details {
+  margin-top: 0.75rem;
+}
+
+.area-hotspots-summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.5rem;
+}
+
+.area-hotspots-details[open] .area-hotspots-summary {
+  margin-bottom: 0.75rem;
+}
+
+.browse-map-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.browse-map-pagination .pagination {
+  margin: 0;
+}
+
 .modal-wide {
   max-width: 960px;
   width: min(96vw, 960px);

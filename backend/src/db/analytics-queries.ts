@@ -1,14 +1,15 @@
 import { badgeCountSql, buildBadgeCondition, type BadgeFilter } from './badge-sql';
 import { buildListConditions, countTickets, type BrowseListParams } from './queries';
 import { findOverlapsInArea } from '../lib/overlaps';
-import { loadTicketCandidatesWithFilters } from '../lib/overlap-load';
+import { loadAllTicketCandidatesWithFilters } from '../lib/overlap-load';
 import type { TicketSystem } from '../types';
 
 export type AreaAnalyticsParams = BrowseListParams & {
   systems: TicketSystem[];
 };
 
-export const MAX_AREA_TICKETS = 400;
+/** Map pin page size used by the browse UI. */
+export const BROWSE_MAP_PAGE_SIZE = 400;
 
 export type AnalyticsParams = {
   startDate?: string;
@@ -457,15 +458,11 @@ export async function getAreaAnalytics(
     totals.late += row.badges.late;
   }
 
-  const tooLarge = ticketCount > MAX_AREA_TICKETS;
-  let overlaps = null;
-  if (!tooLarge) {
-    const candidates = await loadTicketCandidatesWithFilters(db, systems, params, MAX_AREA_TICKETS + 1);
-    overlaps = findOverlapsInArea(candidates, {
-      limit: opts.limit ?? 20,
-      bboxOnly: opts.bboxOnly ?? true,
-    });
-  }
+  const candidates = await loadAllTicketCandidatesWithFilters(db, systems, params);
+  const overlaps = findOverlapsInArea(candidates, {
+    limit: opts.limit ?? 20,
+    bboxOnly: opts.bboxOnly ?? true,
+  });
 
   return {
     today,
@@ -473,9 +470,5 @@ export async function getAreaAnalytics(
     totals,
     bySystem,
     overlaps,
-    overlapsSkipped: tooLarge,
-    overlapsNote: tooLarge
-      ? `Area has ${ticketCount.toLocaleString()} tickets — overlap hotspots are skipped above ${MAX_AREA_TICKETS}. Draw a smaller box to see overlaps.`
-      : undefined,
   };
 }

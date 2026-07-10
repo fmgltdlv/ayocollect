@@ -18,6 +18,7 @@ const authArea = document.getElementById('auth-area');
 const feedbackBtn = document.getElementById('feedback-btn');
 
 const BROWSE_PAGE_SIZE = 100;
+const BROWSE_MAP_PAGE_SIZE = 400;
 const BROWSE_ZOOM_CLUSTERS_UNTIL = 13;
 const BROWSE_ZOOM_POLYGONS_FROM = 17;
 const DETAIL_MAP_MAX_ZOOM = 22;
@@ -44,6 +45,8 @@ let state = {
   browseMapMode: null,
   browsePageTickets: [],
   browseMapTickets: [],
+  browseMapPage: 0,
+  browseMapTotal: 0,
   browseAreaInsights: null,
   browseAreaError: null,
   browsePolygonByKey: {},
@@ -707,6 +710,9 @@ function renderAreaInsightsPanel() {
 
   const t = area.totals;
   const hotspots = area.overlaps?.hotspots ?? [];
+  const overlapSummary = area.overlaps
+    ? `${area.overlaps.totalPairs.toLocaleString()} overlap pair(s), ${area.overlaps.concurrentPairs.toLocaleString()} concurrent`
+    : '';
   el.classList.remove('hidden');
   el.innerHTML = `
     <h3 class="detail-subheading">Area insights (${area.ticketCount.toLocaleString()} tickets)</h3>
@@ -731,33 +737,32 @@ function renderAreaInsightsPanel() {
       </tbody>
     </table>
     ${
-      area.overlapsSkipped
-        ? `<p class="banner">${escapeHtml(area.overlapsNote ?? 'Area too large for overlap analysis — draw a smaller box.')}</p>`
-        : ''
-    }
-    ${
-      hotspots.length
-        ? `<h4 class="analytics-subheading">Overlap hotspots</h4>
-      <table>
-        <thead><tr><th>System</th><th>Ticket</th><th>Overlaps</th><th>Concurrent</th></tr></thead>
-        <tbody>
-          ${hotspots
-            .map(
-              (h) => `
-            <tr class="clickable area-hotspot-row" data-system="${h.system}" data-ticket="${escapeHtml(h.ticketNumber)}" data-revision="${escapeHtml(h.revision ?? '00A')}">
-              <td>${systemLabel(h.system)}</td>
-              <td class="mono">${escapeHtml(h.ticketNumber)}${h.revision ? ` / ${escapeHtml(h.revision)}` : ''}</td>
-              <td>${h.overlapCount}</td>
-              <td>${h.concurrentCount}</td>
-            </tr>`
-            )
-            .join('')}
-        </tbody>
-      </table>
-      <p class="muted">${area.overlaps.totalPairs.toLocaleString()} overlap pair(s), ${area.overlaps.concurrentPairs.toLocaleString()} concurrent</p>`
-        : area.overlapsSkipped
-          ? ''
-          : '<p class="muted">No qualifying overlaps in this area.</p>'
+      area.overlaps
+        ? `<details class="area-hotspots-details">
+        <summary class="area-hotspots-summary">Overlap hotspots (${hotspots.length})</summary>
+        ${
+          hotspots.length
+            ? `<table class="analytics-hotspots-table">
+          <thead><tr><th>System</th><th>Ticket</th><th>Overlaps</th><th>Concurrent</th></tr></thead>
+          <tbody>
+            ${hotspots
+              .map(
+                (h) => `
+              <tr class="clickable area-hotspot-row" data-system="${h.system}" data-ticket="${escapeHtml(h.ticketNumber)}" data-revision="${escapeHtml(h.revision ?? '00A')}">
+                <td>${systemLabel(h.system)}</td>
+                <td class="mono">${escapeHtml(h.ticketNumber)}${h.revision ? ` / ${escapeHtml(h.revision)}` : ''}</td>
+                <td>${h.overlapCount}</td>
+                <td>${h.concurrentCount}</td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>`
+            : '<p class="muted">No qualifying overlaps in this area.</p>'
+        }
+        <p class="muted">${overlapSummary}</p>
+      </details>`
+        : '<p class="muted">No overlap data for this area.</p>'
     }`;
 
   el.querySelectorAll('.area-hotspot-row').forEach((tr) => {
@@ -934,7 +939,8 @@ function renderBrowse() {
           </div>
         </div>
         <div class="map-section">
-          <p class="map-hint">Draw a rectangle to filter tickets, show all tickets in the area on the map (up to 400), and load overlap stats.</p>
+          <p class="map-hint">Draw a rectangle to filter tickets, paginate map pins (400 per page), and load overlap stats for the full area.</p>
+          <div id="browse-map-pagination" class="browse-map-pagination hidden" aria-live="polite"></div>
           <div id="browse-map-legend" class="browse-map-legend hidden" aria-hidden="true"></div>
           <div id="search-map"></div>
         </div>
@@ -1244,13 +1250,84 @@ function refreshBrowseMap(fitBounds = false) {
   void maybeLoadBrowsePolygons();
 }
 
+function renderBrowseMapPagination() {
+  const el = document.getElementById('browse-map-pagination');
+  if (!el) return;
+
+  if (!state.drawLayer || state.browseMapTotal <= 0) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+
+  const page = state.browseMapPage;
+  const total = state.browseMapTotal;
+  const shown = state.browseMapTickets?.length ?? 0;
+  const start = shown ? page * BROWSE_MAP_PAGE_SIZE + 1 : 0;
+  const end = shown ? Math.min(page * BROWSE_MAP_PAGE_SIZE + shown, total) : 0;
+  const pageCount = Math.max(1, Math.ceil(total / BROWSE_MAP_PAGE_SIZE));
+
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <span class="muted">${
+      shown
+        ? `Map: showing ${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`
+        : 'Map: no tickets on this page'
+    }</span>
+    <div class="pagination">
+      <button class="btn btn-secondary" id="browse-map-prev" type="button" ${page === 0 ? 'disabled' : ''}>Previous</button>
+      <span class="muted">Page ${page + 1} of ${pageCount}</span>
+      <button class="btn btn-secondary" id="browse-map-next" type="button" ${(page + 1) * BROWSE_MAP_PAGE_SIZE >= total ? 'disabled' : ''}>Next</button>
+    </div>`;
+
+  document.getElementById('browse-map-prev')?.addEventListener('click', () => {
+    if (state.browseMapPage > 0) void loadBrowseMapPage(state.browseMapPage - 1);
+  });
+  document.getElementById('browse-map-next')?.addEventListener('click', () => {
+    if ((state.browseMapPage + 1) * BROWSE_MAP_PAGE_SIZE < state.browseMapTotal) {
+      void loadBrowseMapPage(state.browseMapPage + 1);
+    }
+  });
+}
+
+async function loadBrowseMapPage(mapPage) {
+  if (!state.drawLayer) return;
+  const systems = browseSystemsFromDom();
+  if (!systems.length) return;
+
+  const paginationEl = document.getElementById('browse-map-pagination');
+  if (paginationEl) {
+    paginationEl.classList.remove('hidden');
+    paginationEl.innerHTML = '<span class="muted">Loading map tickets…</span>';
+  }
+
+  state.browseMapPage = mapPage;
+  try {
+    const { tickets } = await api.browseMapTickets(systems, state.browseParams, {
+      limit: BROWSE_MAP_PAGE_SIZE,
+      offset: mapPage * BROWSE_MAP_PAGE_SIZE,
+    });
+    state.browseMapTickets = tickets ?? [];
+    state.browsePolygonByKey = {};
+    refreshBrowseMap(false);
+    renderBrowseMapPagination();
+  } catch (e) {
+    if (paginationEl) {
+      paginationEl.innerHTML = `<span class="error">${escapeHtml(e.message)}</span>`;
+    }
+  }
+}
+
 function clearBrowseMap() {
   state.browsePageTickets = [];
   state.browseMapTickets = [];
+  state.browseMapPage = 0;
+  state.browseMapTotal = 0;
   state.browseAreaInsights = null;
   state.browseAreaError = null;
   state.browsePolygonByKey = {};
   refreshBrowseMap(false);
+  renderBrowseMapPagination();
   renderAreaInsightsPanel();
 }
 
@@ -1269,6 +1346,7 @@ async function runBrowseSearch(page = 0) {
     state.browseBadges = browseBadgesFromDom();
     state.browseAreaInsights = null;
     state.browseAreaError = null;
+    state.browseMapPage = 0;
   }
 
   const params = {
@@ -1293,7 +1371,12 @@ async function runBrowseSearch(page = 0) {
 
     const listPromise = api.browseTickets(systems, params);
     const mapPromise = hasBbox
-      ? api.browseMapTickets(systems, state.browseParams).catch((e) => ({ tickets: [], _error: e.message }))
+      ? api
+          .browseMapTickets(systems, state.browseParams, {
+            limit: BROWSE_MAP_PAGE_SIZE,
+            offset: state.browseMapPage * BROWSE_MAP_PAGE_SIZE,
+          })
+          .catch((e) => ({ tickets: [], total: 0, _error: e.message }))
       : null;
     const areaPromise = hasBbox ? api.analyticsArea(areaParams).catch((e) => ({ error: e.message })) : null;
 
@@ -1306,6 +1389,7 @@ async function runBrowseSearch(page = 0) {
     state.browseTotal = total;
     state.browsePageTickets = tickets;
     state.browseMapTickets = hasBbox ? mapResult?.tickets ?? [] : tickets;
+    state.browseMapTotal = hasBbox ? total : 0;
 
     if (hasBbox && areaResult?.error) {
       state.browseAreaError = areaResult.error;
@@ -1316,6 +1400,7 @@ async function runBrowseSearch(page = 0) {
     }
 
     renderBrowseResults(tickets, total, page, page === 0);
+    renderBrowseMapPagination();
     renderAreaInsightsPanel();
   } catch (e) {
     resultsEl.textContent = e.message;
