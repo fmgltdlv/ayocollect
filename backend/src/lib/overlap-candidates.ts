@@ -47,7 +47,7 @@ function usanSelect(): string {
     is_cancelled, date(job_start_date) AS created_day, created_by`;
 }
 
-function mapDigAlertRow(row: Record<string, unknown>): TicketCandidate {
+export function mapDigAlertRow(row: Record<string, unknown>): TicketCandidate {
   return {
     system: 'digalert',
     ticketNumber: String(row.ticket_number),
@@ -64,7 +64,7 @@ function mapDigAlertRow(row: Record<string, unknown>): TicketCandidate {
   };
 }
 
-function mapUsanRow(system: 'usan-ca' | 'usan-nv', row: Record<string, unknown>): TicketCandidate {
+export function mapUsanRow(system: 'usan-ca' | 'usan-nv', row: Record<string, unknown>): TicketCandidate {
   return {
     system,
     ticketNumber: String(row.ticket_number),
@@ -151,10 +151,12 @@ export async function loadTicketCandidate(
   return mapUsanRow(ref.system, row);
 }
 
-export async function findOverlapCandidates(
+export async function findOverlapCandidatesPage(
   db: D1Database,
   source: TicketCandidate,
-  targetSystems: TicketSystem[]
+  targetSystems: TicketSystem[],
+  limit: number,
+  offset: number
 ): Promise<TicketCandidate[]> {
   const candidates: TicketCandidate[] = [];
 
@@ -197,7 +199,8 @@ export async function findOverlapCandidates(
         AND bbox_max_lat >= ? AND bbox_min_lat <= ?
         ${exclude}
         ${temporal}
-      LIMIT ${CANDIDATE_CAP}`;
+      LIMIT ? OFFSET ?`;
+    binds.push(limit, offset);
 
     const { results } = await db.prepare(sql).bind(...binds).all<Record<string, unknown>>();
     for (const row of results ?? []) {
@@ -206,6 +209,102 @@ export async function findOverlapCandidates(
   }
 
   return candidates;
+}
+
+export async function findAllOverlapCandidates(
+  db: D1Database,
+  source: TicketCandidate,
+  targetSystems: TicketSystem[]
+): Promise<TicketCandidate[]> {
+  const pageSize = 500;
+  const all: TicketCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const system of targetSystems) {
+    let offset = 0;
+    for (;;) {
+      const page = await findOverlapCandidatesPage(db, source, [system], pageSize, offset);
+      if (!page.length) break;
+      for (const c of page) {
+        const key = ticketRefKey(c.system, c.ticketNumber, c.revision);
+        if (!seen.has(key)) {
+          seen.add(key);
+          all.push(c);
+        }
+      }
+      offset += page.length;
+      if (page.length < pageSize) break;
+    }
+  }
+
+  return all;
+}
+
+export async function findOverlapCandidates(
+  db: D1Database,
+  source: TicketCandidate,
+  targetSystems: TicketSystem[]
+): Promise<TicketCandidate[]> {
+  return findOverlapCandidatesPage(db, source, targetSystems, CANDIDATE_CAP, 0);
+}
+
+export async function loadTicketCandidatesBatch(
+  db: D1Database,
+  refs: TicketRef[]
+): Promise<Map<string, TicketCandidate>> {
+  const map = new Map<string, TicketCandidate>();
+  const digAlert = refs.filter((r) => r.system === 'digalert');
+  const usanCa = refs.filter((r) => r.system === 'usan-ca');
+  const usanNv = refs.filter((r) => r.system === 'usan-nv');
+
+  const chunkSize = 40;
+
+  for (let i = 0; i < digAlert.length; i += chunkSize) {
+    const chunk = digAlert.slice(i, i + chunkSize);
+    if (!chunk.length) continue;
+    const conditions = chunk.map(() => '(ticket_number = ? AND revision = ?)').join(' OR ');
+    const binds = chunk.flatMap((r) => [r.ticketNumber, r.revision ?? '00A']);
+    const { results } = await db
+      .prepare(
+        `SELECT ${digAlertSelect()} FROM dig_alert_tickets
+         WHERE bbox_min_lon IS NOT NULL AND (${conditions})`
+      )
+      .bind(...binds)
+      .all<Record<string, unknown>>();
+    for (const row of results ?? []) {
+      const candidate = mapDigAlertRow(row);
+      map.set(ticketRefKey(candidate.system, candidate.ticketNumber, candidate.revision), candidate);
+    }
+  }
+
+  async function loadUsanBatch(system: 'usan-ca' | 'usan-nv', batch: TicketRef[]) {
+    const table = tableForSystem(system);
+    for (let i = 0; i < batch.length; i += chunkSize) {
+      const chunk = batch.slice(i, i + chunkSize);
+      if (!chunk.length) continue;
+      const placeholders = chunk.map(() => '?').join(', ');
+      const binds = chunk.map((r) => r.ticketNumber);
+      const { results } = await db
+        .prepare(
+          `SELECT ${usanSelect()} FROM ${table}
+           WHERE bbox_min_lon IS NOT NULL AND ticket_number IN (${placeholders})`
+        )
+        .bind(...binds)
+        .all<Record<string, unknown>>();
+      for (const row of results ?? []) {
+        const candidate = mapUsanRow(system, row);
+        map.set(ticketRefKey(candidate.system, candidate.ticketNumber, candidate.revision), candidate);
+      }
+    }
+  }
+
+  await loadUsanBatch('usan-ca', usanCa);
+  await loadUsanBatch('usan-nv', usanNv);
+  return map;
+}
+
+export function ticketRefKey(system: TicketSystem, ticketNumber: string, revision: string | null): string {
+  return `${system}:${ticketNumber}:${revision ?? ''}`;
 }
 
 export async function listTicketsForRebuild(

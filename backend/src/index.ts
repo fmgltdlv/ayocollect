@@ -17,8 +17,8 @@ import {
   listTicketsMulti,
   loadTicketPolygons,
 } from './db/queries';
-import { getAnalyticsSummary, getAnalyticsTrends, getOverlapHotspots } from './db/analytics-queries';
-import { rebuildOverlapsBatch, listOverlapsForTicket, runOverlapMaintenance } from './lib/overlaps';
+import { getAnalyticsSummary, getAnalyticsTrends, getGlobalKpis, getAnalyticsStatsBundle, getAreaAnalytics } from './db/analytics-queries';
+import { findOverlapsForTicket, rebuildOverlapsBatch, clearAllOverlaps, countAllOverlaps } from './lib/overlaps';
 import {
   abortJob,
   cancelJob,
@@ -162,10 +162,27 @@ app.post('/api/admin/overlaps/rebuild', adminOnly, async (c) => {
   const system = (q('system') ?? 'digalert') as TicketSystem;
   const valid = new Set<TicketSystem>(['digalert', 'usan-ca', 'usan-nv']);
   if (!valid.has(system)) return c.json({ error: 'Invalid system' }, 400);
-  const limit = Math.min(Number(q('limit') ?? 500), 500);
+  const limit = Math.min(Math.max(Number(q('limit') ?? 200), 1), 500);
   const offset = Number(q('offset') ?? 0);
-  const result = await rebuildOverlapsBatch(c.env.DB, system, limit, offset);
-  return c.json({ system, ...result });
+  const skipDelete = q('skipDelete') === '1' || q('fresh') === '1';
+  const bboxOnly = q('bboxOnly') === '1' || q('fast') === '1';
+  const result = await rebuildOverlapsBatch(c.env.DB, system, limit, offset, { skipDelete, bboxOnly });
+  return c.json({ system, skipDelete, bboxOnly, ...result });
+});
+
+app.post('/api/admin/overlaps/clear', adminOnly, async (c) => {
+  const q = c.req.query.bind(c.req);
+  const systemParam = q('system');
+  const valid = new Set<TicketSystem>(['digalert', 'usan-ca', 'usan-nv']);
+  const system = systemParam && valid.has(systemParam as TicketSystem) ? (systemParam as TicketSystem) : undefined;
+  const result = await clearAllOverlaps(c.env.DB, system);
+  return c.json({ system: system ?? 'all', ...result });
+});
+
+app.get('/api/admin/overlaps/stats', adminOnly, async (c) => {
+  const total = await countAllOverlaps(c.env.DB);
+  const rebuildCursor = (await getSetting(c.env.DB, 'overlap_rebuild_cursor')) ?? '';
+  return c.json({ total, rebuildCursor });
 });
 
 app.get('/api/admin/settings/overlaps', adminOnly, async (c) => {
@@ -438,6 +455,49 @@ app.get('/api/utility-layers/:layerId/features', async (c) => {
   }
 });
 
+app.get('/api/analytics/kpis', async (c) => {
+  return c.json(await getGlobalKpis(c.env.DB));
+});
+
+app.get('/api/analytics/stats', async (c) => {
+  const q = c.req.query.bind(c.req);
+  const systems = parseSystems(q);
+  return c.json(
+    await getAnalyticsStatsBundle(c.env.DB, {
+      startDate: q('startDate'),
+      endDate: q('endDate'),
+      systems: systems.length ? systems : undefined,
+    })
+  );
+});
+
+app.get('/api/analytics/area', async (c) => {
+  const systems = parseSystems(c.req.query.bind(c.req));
+  if (!systems.length) {
+    return c.json({ error: 'At least one system required (systems=digalert,usan-ca,usan-nv)' }, 400);
+  }
+  const params = listQuery(c);
+  const q = c.req.query.bind(c.req);
+  const fast = q('fast') === '1' || q('bboxOnly') === '1';
+  const limit = Number(q('limit') ?? 20);
+  try {
+    return c.json(
+      await getAreaAnalytics(
+        c.env.DB,
+        { ...params, systems },
+        { limit, bboxOnly: fast || true }
+      )
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const ticketCount = e && typeof e === 'object' && 'ticketCount' in e ? (e as { ticketCount: number }).ticketCount : undefined;
+    if (ticketCount !== undefined) {
+      return c.json({ error: msg, ticketCount, code: 'AREA_TOO_LARGE' }, 400);
+    }
+    return c.json({ error: msg }, 400);
+  }
+});
+
 app.get('/api/analytics/summary', async (c) => {
   const q = c.req.query.bind(c.req);
   const systems = parseSystems(q);
@@ -458,14 +518,7 @@ app.get('/api/analytics/trends', async (c) => {
 });
 
 app.get('/api/analytics/overlaps', async (c) => {
-  const q = c.req.query.bind(c.req);
-  const concurrent = q('concurrent') === '1';
-  const limit = Number(q('limit') ?? 20);
-  try {
-    return c.json(await getOverlapHotspots(c.env.DB, { concurrent, limit }));
-  } catch {
-    return c.json({ hotspots: [] });
-  }
+  return c.json({ error: 'Use GET /api/analytics/area with bbox params' }, 400);
 });
 
 app.get('/api/digalert/tickets', async (c) => c.json(await ticketsListHandler(c, 'digalert')));
@@ -498,10 +551,12 @@ app.get('/api/tickets/:system/:ticketNumber/overlaps', async (c) => {
   const ticketNumber = c.req.param('ticketNumber');
   const revision = c.req.query('revision') ?? (system === 'digalert' ? '00A' : undefined);
   const concurrentOnly = c.req.query('concurrent') === '1';
+  const targetSystems = parseSystems(c.req.query.bind(c.req));
   try {
-    const overlaps = await listOverlapsForTicket(
+    const overlaps = await findOverlapsForTicket(
       c.env.DB,
       { system, ticketNumber, revision: revision ?? null },
+      targetSystems.length ? targetSystems : ['digalert', 'usan-ca', 'usan-nv'],
       concurrentOnly
     );
     return c.json({ overlaps, total: overlaps.length });
@@ -555,7 +610,6 @@ export default {
   scheduled: async (event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
     if (event.cron === '0 * * * *') {
       ctx.waitUntil(runCron(env.DB, env, ctx));
-      ctx.waitUntil(runOverlapMaintenance(env.DB));
     }
     if (event.cron === '*/5 * * * *') {
       ctx.waitUntil(finalizeStaleContainerJobs(env.DB));

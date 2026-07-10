@@ -1,11 +1,11 @@
 import { buildBadgeCondition, type BadgeFilter } from './badge-sql';
 import { enrichRowsWithBadges } from './list-badges';
 import { computeAnalytics, deriveDigAlertCurrentResponses, listBadges } from '../lib/analytics';
-import { countOverlapsForTicket, listOverlapsForTicket } from '../lib/overlaps';
+import { findOverlapsForTicket } from '../lib/overlaps';
 import { enrichUsanHistoryRow } from '../lib/usan-ticket';
 import { type TicketSystem } from '../types';
 
-type ListParams = {
+export type BrowseListParams = {
   ticketNumber?: string;
   startDate?: string;
   endDate?: string;
@@ -80,7 +80,7 @@ function buildBadgeConditions(system: TicketSystem, badges?: BadgeFilter[]) {
   return [`(${parts.join(' OR ')})`];
 }
 
-function buildListConditions(system: TicketSystem, params: ListParams) {
+export function buildListConditions(system: TicketSystem, params: BrowseListParams) {
   const conditions: string[] = [];
   const binds: unknown[] = [];
 
@@ -127,7 +127,7 @@ function buildListConditions(system: TicketSystem, params: ListParams) {
   return { where, binds };
 }
 
-export async function countTickets(db: D1Database, system: TicketSystem, params: ListParams) {
+export async function countTickets(db: D1Database, system: TicketSystem, params: BrowseListParams) {
   const table = tableForSystem(system);
   const { where, binds } = buildListConditions(system, params);
   const row = await db
@@ -137,7 +137,7 @@ export async function countTickets(db: D1Database, system: TicketSystem, params:
   return row?.n ?? 0;
 }
 
-export async function listTickets(db: D1Database, system: TicketSystem, params: ListParams) {
+export async function listTickets(db: D1Database, system: TicketSystem, params: BrowseListParams) {
   const table = tableForSystem(system);
   const { where, binds } = buildListConditions(system, params);
   const limit = params.limit ?? BROWSE_PAGE_SIZE;
@@ -152,7 +152,7 @@ export async function listTickets(db: D1Database, system: TicketSystem, params: 
   return results ?? [];
 }
 
-export async function listTicketsMulti(db: D1Database, systems: TicketSystem[], params: ListParams) {
+export async function listTicketsMulti(db: D1Database, systems: TicketSystem[], params: BrowseListParams) {
   const selected = systems.length ? systems : (['digalert', 'usan-ca', 'usan-nv'] as TicketSystem[]);
   const pageSize = params.limit ?? BROWSE_PAGE_SIZE;
   const offset = params.offset ?? 0;
@@ -301,14 +301,7 @@ export async function getDigAlertDetail(db: D1Database, ticketNumber: string, re
   );
 
   const ref = { system: 'digalert' as const, ticketNumber, revision };
-  let overlapCount = 0;
-  let overlaps: Awaited<ReturnType<typeof listOverlapsForTicket>> = [];
-  try {
-    overlapCount = await countOverlapsForTicket(db, ref);
-    overlaps = await listOverlapsForTicket(db, ref);
-  } catch {
-    /* overlaps table may not exist yet */
-  }
+  const overlaps = await findOverlapsForTicket(db, ref);
 
   return {
     ticket,
@@ -317,7 +310,7 @@ export async function getDigAlertDetail(db: D1Database, ticketNumber: string, re
     revisions: revisions ?? [],
     analytics,
     badges: listBadges(analytics),
-    overlapCount,
+    overlapCount: overlaps.length,
     overlaps,
   };
 }
@@ -361,14 +354,7 @@ export async function getUsanDetail(db: D1Database, system: 'usan-ca' | 'usan-nv
   const analytics = computeAnalytics(current, !!ticket.had_late_response, allCodes);
 
   const ref = { system, ticketNumber, revision: null };
-  let overlapCount = 0;
-  let overlaps: Awaited<ReturnType<typeof listOverlapsForTicket>> = [];
-  try {
-    overlapCount = await countOverlapsForTicket(db, ref);
-    overlaps = await listOverlapsForTicket(db, ref);
-  } catch {
-    /* overlaps table may not exist yet */
-  }
+  const overlaps = await findOverlapsForTicket(db, ref);
 
   return {
     ticket,
@@ -376,7 +362,7 @@ export async function getUsanDetail(db: D1Database, system: 'usan-ca' | 'usan-nv
     ticketHistory: ticketHistory ?? [],
     analytics,
     badges: listBadges(analytics),
-    overlapCount,
+    overlapCount: overlaps.length,
     overlaps,
   };
 }

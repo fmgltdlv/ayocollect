@@ -1,5 +1,14 @@
-import { badgeCountSql, type BadgeFilter } from './badge-sql';
+import { badgeCountSql, buildBadgeCondition, type BadgeFilter } from './badge-sql';
+import { buildListConditions, countTickets, type BrowseListParams } from './queries';
+import { findOverlapsInArea } from '../lib/overlaps';
+import { loadTicketCandidatesWithFilters } from '../lib/overlap-load';
 import type { TicketSystem } from '../types';
+
+export type AreaAnalyticsParams = BrowseListParams & {
+  systems: TicketSystem[];
+};
+
+export const MAX_AREA_TICKETS = 400;
 
 export type AnalyticsParams = {
   startDate?: string;
@@ -41,6 +50,44 @@ function dateRangeWhere(system: TicketSystem, startDate?: string, endDate?: stri
 async function countWhere(db: D1Database, sql: string, ...binds: unknown[]): Promise<number> {
   const row = await db.prepare(sql).bind(...binds).first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+async function systemKpis(db: D1Database, system: TicketSystem, today: string) {
+  const table = tableForSystem(system);
+  const total = await countWhere(db, `SELECT COUNT(*) AS n FROM ${table}`);
+  const active = await countWhere(db, `SELECT COUNT(*) AS n FROM ${table} WHERE ${activeWhere(system, today)}`);
+  const badges: Record<BadgeFilter, number> = {
+    pending: await countWhere(db, badgeCountSql(system, 'pending', activeWhere(system, today))),
+    blocker: await countWhere(db, badgeCountSql(system, 'blocker', activeWhere(system, today))),
+    late: await countWhere(db, badgeCountSql(system, 'late', activeWhere(system, today))),
+  };
+  return { system, total, active, badges };
+}
+
+export async function getGlobalKpis(db: D1Database) {
+  const today = todayIso();
+  const bySystem = [];
+  let totals = { total: 0, active: 0, pending: 0, blockers: 0, late: 0 };
+
+  for (const system of ALL_SYSTEMS) {
+    const row = await systemKpis(db, system, today);
+    bySystem.push(row);
+    totals.total += row.total;
+    totals.active += row.active;
+    totals.pending += row.badges.pending;
+    totals.blockers += row.badges.blocker;
+    totals.late += row.badges.late;
+  }
+
+  return { today, totals, bySystem };
+}
+
+export async function getAnalyticsStatsBundle(db: D1Database, params: AnalyticsParams = {}) {
+  const [summary, trends] = await Promise.all([
+    getAnalyticsSummary(db, params),
+    getAnalyticsTrends(db, 30, params.systems),
+  ]);
+  return { summary, trends };
 }
 
 async function systemCounts(db: D1Database, system: TicketSystem, today: string, params: AnalyticsParams) {
@@ -136,7 +183,7 @@ export async function getAnalyticsSummary(db: D1Database, params: AnalyticsParam
     overlapCount = await countWhere(db, 'SELECT COUNT(*) AS n FROM ticket_overlaps');
     concurrentOverlapCount = await countWhere(db, 'SELECT COUNT(*) AS n FROM ticket_overlaps WHERE concurrent = 1');
   } catch {
-    /* table may not exist before migration */
+    /* table may not exist */
   }
 
   return {
@@ -268,4 +315,107 @@ export async function getOverlapHotspots(
   }
 
   return { hotspots };
+}
+
+function mergeFilterWhere(system: TicketSystem, params: BrowseListParams, extra: string[] = []) {
+  const { where, binds } = buildListConditions(system, params);
+  const base = where ? where.replace(/^WHERE\s+/, '') : '';
+  const parts = [...(base ? [base] : []), ...extra.filter(Boolean)];
+  return {
+    where: parts.length ? `WHERE ${parts.join(' AND ')}` : '',
+    binds,
+  };
+}
+
+async function countFiltered(
+  db: D1Database,
+  system: TicketSystem,
+  params: BrowseListParams,
+  extra: string[] = []
+): Promise<number> {
+  const table = tableForSystem(system);
+  const { where, binds } = mergeFilterWhere(system, params, extra);
+  const row = await db.prepare(`SELECT COUNT(*) AS n FROM ${table} ${where}`).bind(...binds).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+async function areaSystemKpis(
+  db: D1Database,
+  system: TicketSystem,
+  today: string,
+  params: BrowseListParams
+) {
+  const activeExtra = activeWhere(system, today);
+  const badges: Record<BadgeFilter, number> = {
+    pending: await countFiltered(db, system, params, [
+      activeExtra,
+      buildBadgeCondition(system, 'pending'),
+    ]),
+    blocker: await countFiltered(db, system, params, [
+      activeExtra,
+      buildBadgeCondition(system, 'blocker'),
+    ]),
+    late: await countFiltered(db, system, params, [buildBadgeCondition(system, 'late')]),
+  };
+  return {
+    system,
+    total: await countTickets(db, system, params),
+    active: await countFiltered(db, system, params, [activeExtra]),
+    badges,
+  };
+}
+
+export async function getAreaAnalytics(
+  db: D1Database,
+  params: AreaAnalyticsParams,
+  opts: { limit?: number; bboxOnly?: boolean } = {}
+) {
+  const systems = params.systems.length ? params.systems : ALL_SYSTEMS;
+  if (
+    params.minLon === undefined ||
+    params.minLat === undefined ||
+    params.maxLon === undefined ||
+    params.maxLat === undefined
+  ) {
+    throw new Error('minLon, minLat, maxLon, maxLat required');
+  }
+
+  const ticketCount = (
+    await Promise.all(systems.map((system) => countTickets(db, system, params)))
+  ).reduce((sum, n) => sum + n, 0);
+
+  if (ticketCount > MAX_AREA_TICKETS) {
+    const err = new Error(
+      `Area contains ${ticketCount} tickets — draw a smaller rectangle (max ${MAX_AREA_TICKETS}).`
+    ) as Error & { ticketCount: number; code: string };
+    err.ticketCount = ticketCount;
+    err.code = 'AREA_TOO_LARGE';
+    throw err;
+  }
+
+  const today = todayIso();
+  const bySystem = await Promise.all(systems.map((system) => areaSystemKpis(db, system, today, params)));
+
+  let totals = { total: 0, active: 0, pending: 0, blockers: 0, late: 0 };
+  for (const row of bySystem) {
+    totals.total += row.total;
+    totals.active += row.active;
+    totals.pending += row.badges.pending;
+    totals.blockers += row.badges.blocker;
+    totals.late += row.badges.late;
+  }
+
+  const candidates = await loadTicketCandidatesWithFilters(db, systems, params, MAX_AREA_TICKETS + 1);
+  const overlapResult = findOverlapsInArea(candidates, {
+    limit: opts.limit ?? 20,
+    bboxOnly: opts.bboxOnly ?? true,
+  });
+
+  return {
+    today,
+    ticketCount,
+    totals,
+    bySystem,
+    overlaps: overlapResult,
+  };
 }

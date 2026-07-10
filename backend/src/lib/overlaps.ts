@@ -4,8 +4,11 @@ import {
   canonicalPair,
   shouldCountAsOverlap,
   findOverlapCandidates,
+  findAllOverlapCandidates,
   loadTicketCandidate,
+  loadTicketCandidatesBatch,
   listTicketsForRebuild,
+  ticketRefKey,
   workWindowsOverlap,
   type TicketCandidate,
   type TicketRef,
@@ -18,8 +21,21 @@ const ALL_SYSTEMS: TicketSystem[] = ['digalert', 'usan-ca', 'usan-nv'];
 const PRUNE_DAYS = 60;
 const PRUNE_BATCH = 5000;
 const PRUNE_MAX_ROUNDS = 5;
+const REBUILD_PARALLEL = 8;
+const INSERT_BATCH_SIZE = 50;
 
-function overlapKind(source: TicketCandidate, candidate: TicketCandidate): 'polygon' | 'bbox' | null {
+export type RebuildOptions = {
+  /** Skip per-ticket DELETE when overlaps were cleared globally. */
+  skipDelete?: boolean;
+  /** Use bbox intersection only (skip expensive polygon checks). */
+  bboxOnly?: boolean;
+};
+
+function overlapKind(
+  source: TicketCandidate,
+  candidate: TicketCandidate,
+  bboxOnly = false
+): 'polygon' | 'bbox' | null {
   const aBbox = {
     minLon: source.bboxMinLon,
     minLat: source.bboxMinLat,
@@ -34,6 +50,8 @@ function overlapKind(source: TicketCandidate, candidate: TicketCandidate): 'poly
   };
   if (!bboxesOverlap(aBbox, bBbox)) return null;
 
+  if (bboxOnly) return 'bbox';
+
   if (source.polygonWkt && candidate.polygonWkt) {
     const ga = wktToGeoJsonPolygon(source.polygonWkt);
     const gb = wktToGeoJsonPolygon(candidate.polygonWkt);
@@ -42,6 +60,114 @@ function overlapKind(source: TicketCandidate, candidate: TicketCandidate): 'poly
   }
 
   return 'bbox';
+}
+
+export type OverlapListItem = {
+  system: TicketSystem;
+  ticketNumber: string;
+  revision: string | null;
+  overlapKind: string;
+  concurrent: boolean;
+};
+
+export type OverlapHotspotResult = {
+  system: TicketSystem;
+  ticketNumber: string;
+  revision: string | null;
+  overlapCount: number;
+  concurrentCount: number;
+  centroidLat: number | null;
+  centroidLon: number | null;
+};
+
+function candidateCentroid(c: TicketCandidate): { lat: number | null; lon: number | null } {
+  return {
+    lat: (c.bboxMinLat + c.bboxMaxLat) / 2,
+    lon: (c.bboxMinLon + c.bboxMaxLon) / 2,
+  };
+}
+
+export function findOverlapsInArea(
+  candidates: TicketCandidate[],
+  opts: { limit?: number; bboxOnly?: boolean } = {}
+): { hotspots: OverlapHotspotResult[]; totalPairs: number; concurrentPairs: number } {
+  const limit = opts.limit ?? 20;
+  const bboxOnly = opts.bboxOnly ?? true;
+  const counts = new Map<string, { concurrent: number; total: number; candidate: TicketCandidate }>();
+
+  let totalPairs = 0;
+  let concurrentPairs = 0;
+
+  for (let i = 0; i < candidates.length; i++) {
+    for (let j = i + 1; j < candidates.length; j++) {
+      const a = candidates[i];
+      const b = candidates[j];
+      if (!shouldCountAsOverlap(a, b)) continue;
+      const kind = overlapKind(a, b, bboxOnly);
+      if (!kind) continue;
+
+      totalPairs++;
+      const concurrent = workWindowsOverlap(a, b);
+      if (concurrent) concurrentPairs++;
+
+      for (const c of [a, b]) {
+        const key = ticketRefKey(c.system, c.ticketNumber, c.revision);
+        const entry = counts.get(key) ?? { concurrent: 0, total: 0, candidate: c };
+        entry.total++;
+        if (concurrent) entry.concurrent++;
+        counts.set(key, entry);
+      }
+    }
+  }
+
+  const hotspots = [...counts.entries()]
+    .map(([, v]) => {
+      const { lat, lon } = candidateCentroid(v.candidate);
+      return {
+        system: v.candidate.system,
+        ticketNumber: v.candidate.ticketNumber,
+        revision: v.candidate.revision,
+        overlapCount: v.total,
+        concurrentCount: v.concurrent,
+        centroidLat: lat,
+        centroidLon: lon,
+      };
+    })
+    .sort((a, b) => b.overlapCount - a.overlapCount || b.concurrentCount - a.concurrentCount)
+    .slice(0, limit);
+
+  return { hotspots, totalPairs, concurrentPairs };
+}
+
+export async function findOverlapsForTicket(
+  db: D1Database,
+  ref: TicketRef,
+  targetSystems: TicketSystem[] = ALL_SYSTEMS,
+  concurrentOnly = false
+): Promise<OverlapListItem[]> {
+  const source = await loadTicketCandidate(db, ref);
+  if (!source) return [];
+
+  const candidates = await findAllOverlapCandidates(db, source, targetSystems);
+  const overlaps: OverlapListItem[] = [];
+
+  for (const candidate of candidates) {
+    if (!shouldCountAsOverlap(source, candidate)) continue;
+    const kind = overlapKind(source, candidate, false);
+    if (!kind) continue;
+    const concurrent = workWindowsOverlap(source, candidate);
+    if (concurrentOnly && !concurrent) continue;
+    overlaps.push({
+      system: candidate.system,
+      ticketNumber: candidate.ticketNumber,
+      revision: candidate.revision,
+      overlapKind: kind,
+      concurrent,
+    });
+  }
+
+  overlaps.sort((a, b) => Number(b.concurrent) - Number(a.concurrent));
+  return overlaps;
 }
 
 async function deleteOverlapsForTicket(db: D1Database, ref: TicketRef): Promise<void> {
@@ -56,38 +182,47 @@ async function deleteOverlapsForTicket(db: D1Database, ref: TicketRef): Promise<
     .run();
 }
 
-async function insertOverlap(
+async function insertOverlapsBatch(
   db: D1Database,
-  a: TicketRef,
-  b: TicketRef,
-  kind: 'polygon' | 'bbox',
-  source: TicketCandidate,
-  candidate: TicketCandidate
+  items: Array<{
+    a: TicketRef;
+    b: TicketRef;
+    kind: 'polygon' | 'bbox';
+    source: TicketCandidate;
+    candidate: TicketCandidate;
+  }>
 ): Promise<void> {
-  const [left, right] = canonicalPair(a, b);
-  const concurrent = workWindowsOverlap(source, candidate) ? 1 : 0;
-  await db
-    .prepare(
-      `INSERT INTO ticket_overlaps (
-        a_system, a_number, a_revision, b_system, b_number, b_revision,
-        overlap_kind, concurrent, computed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      ON CONFLICT(a_system, a_number, a_revision, b_system, b_number, b_revision) DO UPDATE SET
-        overlap_kind = excluded.overlap_kind,
-        concurrent = excluded.concurrent,
-        computed_at = datetime('now')`
-    )
-    .bind(
-      left.system,
-      left.ticketNumber,
-      left.revision ?? null,
-      right.system,
-      right.ticketNumber,
-      right.revision ?? null,
-      kind,
-      concurrent
-    )
-    .run();
+  if (!items.length) return;
+
+  const statements = items.map(({ a, b, kind, source, candidate }) => {
+    const [left, right] = canonicalPair(a, b);
+    const concurrent = workWindowsOverlap(source, candidate) ? 1 : 0;
+    return db
+      .prepare(
+        `INSERT INTO ticket_overlaps (
+          a_system, a_number, a_revision, b_system, b_number, b_revision,
+          overlap_kind, concurrent, computed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(a_system, a_number, a_revision, b_system, b_number, b_revision) DO UPDATE SET
+          overlap_kind = excluded.overlap_kind,
+          concurrent = excluded.concurrent,
+          computed_at = datetime('now')`
+      )
+      .bind(
+        left.system,
+        left.ticketNumber,
+        left.revision ?? null,
+        right.system,
+        right.ticketNumber,
+        right.revision ?? null,
+        kind,
+        concurrent
+      );
+  });
+
+  for (let i = 0; i < statements.length; i += INSERT_BATCH_SIZE) {
+    await db.batch(statements.slice(i, i + INSERT_BATCH_SIZE));
+  }
 }
 
 async function targetSystems(db: D1Database, sourceSystem: TicketSystem): Promise<TicketSystem[]> {
@@ -101,20 +236,59 @@ async function targetSystems(db: D1Database, sourceSystem: TicketSystem): Promis
   return systems;
 }
 
-export async function recomputeOverlapsForTicket(db: D1Database, ref: TicketRef): Promise<number> {
-  const source = await loadTicketCandidate(db, ref);
+export async function clearAllOverlaps(
+  db: D1Database,
+  system?: TicketSystem
+): Promise<{ deleted: number }> {
+  const result = system
+    ? await db
+        .prepare(`DELETE FROM ticket_overlaps WHERE a_system = ? OR b_system = ?`)
+        .bind(system, system)
+        .run()
+    : await db.prepare(`DELETE FROM ticket_overlaps`).run();
+
+  await setSetting(db, 'overlap_rebuild_cursor', '');
+  return { deleted: result.meta.changes ?? 0 };
+}
+
+export async function countAllOverlaps(db: D1Database): Promise<number> {
+  const row = await db.prepare(`SELECT COUNT(*) AS n FROM ticket_overlaps`).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+type RecomputeContext = RebuildOptions & {
+  source?: TicketCandidate;
+  targetSystems?: TicketSystem[];
+};
+
+export async function recomputeOverlapsForTicket(
+  db: D1Database,
+  ref: TicketRef,
+  context: RecomputeContext = {}
+): Promise<number> {
+  const source =
+    context.source ??
+    (await loadTicketCandidate(db, ref));
   if (!source) return 0;
 
-  await deleteOverlapsForTicket(db, ref);
+  if (!context.skipDelete) {
+    await deleteOverlapsForTicket(db, ref);
+  }
 
-  const systems = await targetSystems(db, ref.system);
+  const systems = context.targetSystems ?? (await targetSystems(db, ref.system));
   const candidates = await findOverlapCandidates(db, source, systems);
-  let count = 0;
+  const toInsert: Array<{
+    a: TicketRef;
+    b: TicketRef;
+    kind: 'polygon' | 'bbox';
+    source: TicketCandidate;
+    candidate: TicketCandidate;
+  }> = [];
 
   for (const candidate of candidates.slice(0, CANDIDATE_CAP)) {
     if (!shouldCountAsOverlap(source, candidate)) continue;
 
-    const kind = overlapKind(source, candidate);
+    const kind = overlapKind(source, candidate, context.bboxOnly);
     if (!kind) continue;
 
     const candidateRef: TicketRef = {
@@ -122,11 +296,11 @@ export async function recomputeOverlapsForTicket(db: D1Database, ref: TicketRef)
       ticketNumber: candidate.ticketNumber,
       revision: candidate.revision,
     };
-    await insertOverlap(db, ref, candidateRef, kind, source, candidate);
-    count++;
+    toInsert.push({ a: ref, b: candidateRef, kind, source, candidate });
   }
 
-  return count;
+  await insertOverlapsBatch(db, toInsert);
+  return toInsert.length;
 }
 
 export async function countOverlapsForTicket(
@@ -134,100 +308,50 @@ export async function countOverlapsForTicket(
   ref: TicketRef,
   concurrentOnly = false
 ): Promise<number> {
-  const revision = ref.revision ?? null;
-  const concurrentSql = concurrentOnly ? ' AND concurrent = 1' : '';
-  const row = await db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM ticket_overlaps
-       WHERE ((a_system = ? AND a_number = ? AND COALESCE(a_revision, '') = COALESCE(?, ''))
-           OR (b_system = ? AND b_number = ? AND COALESCE(b_revision, '') = COALESCE(?, '')))
-       ${concurrentSql}`
-    )
-    .bind(ref.system, ref.ticketNumber, revision, ref.system, ref.ticketNumber, revision)
-    .first<{ n: number }>();
-  return row?.n ?? 0;
+  const overlaps = await findOverlapsForTicket(db, ref, ALL_SYSTEMS, concurrentOnly);
+  return overlaps.length;
 }
-
-export type OverlapListItem = {
-  system: TicketSystem;
-  ticketNumber: string;
-  revision: string | null;
-  overlapKind: string;
-  concurrent: boolean;
-};
 
 export async function listOverlapsForTicket(
   db: D1Database,
   ref: TicketRef,
   concurrentOnly = false
 ): Promise<OverlapListItem[]> {
-  const revision = ref.revision ?? null;
-  const revMatch = `COALESCE(a_revision, '') = COALESCE(?, '')`;
-  const revMatchB = `COALESCE(b_revision, '') = COALESCE(?, '')`;
-  const concurrentSql = concurrentOnly ? ' AND concurrent = 1' : '';
-
-  const { results } = await db
-    .prepare(
-      `SELECT
-         CASE WHEN a_system = ? AND a_number = ? AND ${revMatch}
-           THEN b_system ELSE a_system END AS system,
-         CASE WHEN a_system = ? AND a_number = ? AND ${revMatch}
-           THEN b_number ELSE a_number END AS ticket_number,
-         CASE WHEN a_system = ? AND a_number = ? AND ${revMatch}
-           THEN b_revision ELSE a_revision END AS revision,
-         overlap_kind,
-         concurrent
-       FROM ticket_overlaps
-       WHERE ((a_system = ? AND a_number = ? AND ${revMatch})
-           OR (b_system = ? AND b_number = ? AND ${revMatchB}))
-       ${concurrentSql}
-       ORDER BY concurrent DESC, computed_at DESC`
-    )
-    .bind(
-      ref.system,
-      ref.ticketNumber,
-      revision,
-      ref.system,
-      ref.ticketNumber,
-      revision,
-      ref.system,
-      ref.ticketNumber,
-      revision,
-      ref.system,
-      ref.ticketNumber,
-      revision,
-      ref.system,
-      ref.ticketNumber,
-      revision
-    )
-    .all<{
-      system: TicketSystem;
-      ticket_number: string;
-      revision: string | null;
-      overlap_kind: string;
-      concurrent: number;
-    }>();
-
-  return (results ?? []).map((r) => ({
-    system: r.system,
-    ticketNumber: r.ticket_number,
-    revision: r.revision,
-    overlapKind: r.overlap_kind,
-    concurrent: !!r.concurrent,
-  }));
+  return findOverlapsForTicket(db, ref, ALL_SYSTEMS, concurrentOnly);
 }
 
 export async function rebuildOverlapsBatch(
   db: D1Database,
   system: TicketSystem,
   limit: number,
-  offset: number
+  offset: number,
+  options: RebuildOptions = {}
 ): Promise<{ processed: number; overlapsFound: number; nextOffset: number }> {
   const refs = await listTicketsForRebuild(db, system, limit, offset);
-  let overlapsFound = 0;
-  for (const ref of refs) {
-    overlapsFound += await recomputeOverlapsForTicket(db, ref);
+  if (!refs.length) {
+    return { processed: 0, overlapsFound: 0, nextOffset: offset };
   }
+
+  const sources = await loadTicketCandidatesBatch(db, refs);
+  const systems = await targetSystems(db, system);
+  let overlapsFound = 0;
+
+  for (let i = 0; i < refs.length; i += REBUILD_PARALLEL) {
+    const chunk = refs.slice(i, i + REBUILD_PARALLEL);
+    const counts = await Promise.all(
+      chunk.map(async (ref) => {
+        const source = sources.get(ticketRefKey(ref.system, ref.ticketNumber, ref.revision ?? null));
+        if (!source) return 0;
+        return recomputeOverlapsForTicket(db, ref, {
+          ...options,
+          source,
+          targetSystems: systems,
+        });
+      })
+    );
+    overlapsFound += counts.reduce((sum, n) => sum + n, 0);
+  }
+
   const nextOffset = offset + refs.length;
   await setSetting(db, 'overlap_rebuild_cursor', `${system}:${nextOffset}`);
   return { processed: refs.length, overlapsFound, nextOffset };

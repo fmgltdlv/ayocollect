@@ -73,6 +73,15 @@ export const api = {
   removeAdmin: (email) =>
     request(`/admin/users/${encodeURIComponent(email)}`, { method: 'DELETE' }),
   nukeTickets: () => request('/admin/nuke-tickets', { method: 'POST' }),
+  analyticsKpis: () => request('/analytics/kpis'),
+  analyticsStats: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/analytics/stats${q ? `?${q}` : ''}`);
+  },
+  analyticsArea: (params = {}) => {
+    const q = new URLSearchParams({ fast: '1', ...params }).toString();
+    return request(`/analytics/area?${q}`);
+  },
   analyticsSummary: (params = {}) => {
     const q = new URLSearchParams(params).toString();
     return request(`/analytics/summary${q ? `?${q}` : ''}`);
@@ -93,6 +102,11 @@ export const api = {
     const q = new URLSearchParams(params).toString();
     return request(`/admin/overlaps/rebuild${q ? `?${q}` : ''}`, { method: 'POST' });
   },
+  clearOverlaps: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/admin/overlaps/clear${q ? `?${q}` : ''}`, { method: 'POST' });
+  },
+  getOverlapStats: () => request('/admin/overlaps/stats'),
   getOverlapSettings: () => request('/admin/settings/overlaps'),
   putOverlapSettings: (body) =>
     request('/admin/settings/overlaps', { method: 'PUT', body: JSON.stringify(body) }),

@@ -907,6 +907,42 @@ tr.clickable td.ticket-refresh-col {
 .kpi-blocker { color: var(--blocker); }
 .kpi-late { color: var(--late); }
 
+.browse-kpi-panel {
+  margin-bottom: 0.75rem;
+}
+
+.browse-kpi-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.browse-kpi-grid {
+  flex: 1;
+  margin-top: 0;
+}
+
+.browse-kpi-note {
+  margin: 0.5rem 0 0;
+}
+
+.browse-area-kpi {
+  margin: 0.75rem 0 1rem;
+}
+
+.browse-area-system-table {
+  margin-bottom: 1rem;
+}
+
+.modal-wide {
+  max-width: 960px;
+  width: min(96vw, 960px);
+  max-height: 90vh;
+  overflow: auto;
+}
+
 .analytics-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));

@@ -1,7 +1,5 @@
 import { scanHadLateResponse } from '../lib/analytics';
 
-import { recomputeOverlapsForTicket } from '../lib/overlaps';
-
 import { bboxFromWkt } from '../lib/polygon';
 
 import { usanRevisionSuffix } from '../lib/usan-ticket';
@@ -302,18 +300,6 @@ export async function upsertDigAlert(db: D1Database, envelope: DigAlertPayload):
 
 
 
-  try {
-
-    await recomputeOverlapsForTicket(db, { system: 'digalert', ticketNumber, revision });
-
-  } catch (e) {
-
-    console.error('overlap recompute failed', ticketNumber, revision, e);
-
-  }
-
-
-
   return ticketNumber;
 
 }
@@ -589,20 +575,6 @@ export async function upsertUsan(
       )
 
       .run();
-
-  }
-
-
-
-  const usanSystem = table === 'usan_ca' ? ('usan-ca' as const) : ('usan-nv' as const);
-
-  try {
-
-    await recomputeOverlapsForTicket(db, { system: usanSystem, ticketNumber, revision: null });
-
-  } catch (e) {
-
-    console.error('overlap recompute failed', ticketNumber, e);
 
   }
 

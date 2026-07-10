@@ -1,4 +1,4 @@
-import { api, badgesHtml, bboxFromLayer, parseWktToLatLngs } from './api.js';
+﻿import { api, badgesHtml, bboxFromLayer, parseWktToLatLngs } from './api.js';
 import {
   loadUtilityLayersOnMap,
   renderUtilityLegend,
@@ -34,8 +34,6 @@ let state = {
   detail: null,
   detailSystem: null,
   detailBackdrop: null,
-  analytics: null,
-  analyticsMap: null,
   searchMap: null,
   detailMap: null,
   detailUtilityGroup: null,
@@ -45,6 +43,10 @@ let state = {
   ticketPolygonGroup: null,
   browseMapMode: null,
   browsePageTickets: [],
+  browseMapTickets: [],
+  browseKpis: null,
+  browseAreaInsights: null,
+  browseAreaError: null,
   browsePolygonByKey: {},
   browsePolygonLoading: false,
   jobsPollId: null,
@@ -145,14 +147,14 @@ function showFeedbackModal() {
     const message = textarea.value.trim();
     if (!message) return;
     submitBtn.disabled = true;
-    msgEl.textContent = 'Sending…';
+    msgEl.textContent = 'Sendingâ€¦';
     try {
       await api.submitFeedback({
         message,
         pageUrl: `${window.location.pathname}#${state.view}`,
       });
       backdrop.remove();
-      alert('Thanks — your feedback was sent to the admin team.');
+      alert('Thanks â€” your feedback was sent to the admin team.');
     } catch (err) {
       msgEl.textContent = err.message;
       submitBtn.disabled = false;
@@ -203,9 +205,9 @@ function systemLabel(s) {
 function ticketRowLabel(t, system) {
   const sys = system ?? t.system;
   if (sys === 'digalert') {
-    return [t.place, t.street, t.work_type].filter(Boolean).join(' · ') || t.location || '—';
+    return [t.place, t.street, t.work_type].filter(Boolean).join(' Â· ') || t.location || 'â€”';
   }
-  return [t.address, t.work_type, t.work_activity].filter(Boolean).join(' · ') || '—';
+  return [t.address, t.work_type, t.work_activity].filter(Boolean).join(' Â· ') || 'â€”';
 }
 
 function escapeHtml(value) {
@@ -218,7 +220,7 @@ function escapeHtml(value) {
 
 function formatTicketFieldValue(key, value) {
   if (value === null || value === undefined || value === '') {
-    return '<span class="muted">—</span>';
+    return '<span class="muted">â€”</span>';
   }
   if (typeof value === 'number' && (key.startsWith('is_') || key === 'one_year')) {
     return value ? 'Yes' : 'No';
@@ -356,7 +358,7 @@ function ticketInfoHtml(system, ticket) {
 
 function formatHistoryDate(value) {
   if (value === null || value === undefined || value === '') {
-    return '<span class="muted">—</span>';
+    return '<span class="muted">â€”</span>';
   }
   const d = new Date(String(value));
   if (!Number.isNaN(d.getTime())) {
@@ -367,7 +369,7 @@ function formatHistoryDate(value) {
 
 function historyCell(value) {
   if (value === null || value === undefined || value === '') {
-    return '<span class="muted">—</span>';
+    return '<span class="muted">â€”</span>';
   }
   return escapeHtml(String(value));
 }
@@ -507,7 +509,7 @@ async function refreshSelectedBrowseTickets() {
   const prevLabel = btn?.textContent ?? 'Refresh selected';
   if (btn) {
     btn.disabled = true;
-    btn.textContent = 'Refreshing…';
+    btn.textContent = 'Refreshingâ€¦';
   }
   if (statusEl) statusEl.textContent = '';
 
@@ -517,7 +519,7 @@ async function refreshSelectedBrowseTickets() {
     const tr = selected[i];
     const { system, ticket, revision } = tr.dataset;
     if (statusEl) {
-      statusEl.textContent = `Refreshing ${i + 1} of ${selected.length}: ${ticket}…`;
+      statusEl.textContent = `Refreshing ${i + 1} of ${selected.length}: ${ticket}â€¦`;
     }
     try {
       await api.fetchOne(system, browseTicketFetchBody(system, ticket, revision));
@@ -525,7 +527,7 @@ async function refreshSelectedBrowseTickets() {
     } catch (e) {
       failed += 1;
       if (statusEl) {
-        statusEl.textContent = `Failed ${ticket}: ${e.message}. Continuing…`;
+        statusEl.textContent = `Failed ${ticket}: ${e.message}. Continuingâ€¦`;
       }
       await new Promise((r) => setTimeout(r, 400));
     }
@@ -561,7 +563,7 @@ function renderBrowseResults(tickets, total, page, fitMap = false) {
 
   resultsEl.innerHTML = `
     <div class="browse-meta">
-      <span class="muted">Showing ${start}–${end} of ${total}</span>
+      <span class="muted">Showing ${start}â€“${end} of ${total}</span>
       <div class="browse-meta-actions">
         ${
           adminRefresh
@@ -642,9 +644,234 @@ function renderBrowseResults(tickets, total, page, fitMap = false) {
   });
 }
 
+function browseMapTicketSource() {
+  if (state.drawLayer && state.browseMapTickets?.length) return state.browseMapTickets;
+  return state.browsePageTickets;
+}
+
+function kpiCardsHtml(totals) {
+  const t = totals;
+  return `
+    <div class="kpi-card"><span class="kpi-label">Active</span><span class="kpi-value">${t.active.toLocaleString()}</span></div>
+    <div class="kpi-card"><span class="kpi-label">Pending</span><span class="kpi-value kpi-pending">${t.pending.toLocaleString()}</span></div>
+    <div class="kpi-card"><span class="kpi-label">Blockers</span><span class="kpi-value kpi-blocker">${t.blockers.toLocaleString()}</span></div>
+    <div class="kpi-card"><span class="kpi-label">Late</span><span class="kpi-value kpi-late">${t.late.toLocaleString()}</span></div>
+    <div class="kpi-card"><span class="kpi-label">Total stored</span><span class="kpi-value">${t.total.toLocaleString()}</span></div>`;
+}
+
+function renderAreaInsightsPanel() {
+  const el = document.getElementById('browse-area-insights');
+  if (!el) return;
+
+  if (!state.drawLayer) {
+    el.innerHTML = '';
+    el.classList.add('hidden');
+    return;
+  }
+
+  if (state.browseAreaError) {
+    el.classList.remove('hidden');
+    el.innerHTML = `<p class="banner">${escapeHtml(state.browseAreaError)}</p>`;
+    return;
+  }
+
+  const area = state.browseAreaInsights;
+  if (!area) {
+    el.classList.remove('hidden');
+    el.innerHTML = '<p class="muted">Loading area insightsâ€¦</p>';
+    return;
+  }
+
+  const t = area.totals;
+  const hotspots = area.overlaps?.hotspots ?? [];
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <h3 class="detail-subheading">Area insights (${area.ticketCount.toLocaleString()} tickets)</h3>
+    <p class="muted">Same filters as search Â· overlaps use bbox-only checks in area mode</p>
+    <div class="kpi-grid browse-area-kpi">${kpiCardsHtml(t)}</div>
+    <table class="browse-area-system-table">
+      <thead><tr><th>System</th><th>Total</th><th>Active</th><th>Pending</th><th>Blockers</th><th>Late</th></tr></thead>
+      <tbody>
+        ${area.bySystem
+          .map(
+            (s) => `
+          <tr>
+            <td>${systemLabel(s.system)}</td>
+            <td>${s.total.toLocaleString()}</td>
+            <td>${s.active.toLocaleString()}</td>
+            <td>${s.badges.pending.toLocaleString()}</td>
+            <td>${s.badges.blocker.toLocaleString()}</td>
+            <td>${s.badges.late.toLocaleString()}</td>
+          </tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>
+    ${
+      hotspots.length
+        ? `<h4 class="analytics-subheading">Overlap hotspots</h4>
+      <table>
+        <thead><tr><th>System</th><th>Ticket</th><th>Overlaps</th><th>Concurrent</th></tr></thead>
+        <tbody>
+          ${hotspots
+            .map(
+              (h) => `
+            <tr class="clickable area-hotspot-row" data-system="${h.system}" data-ticket="${escapeHtml(h.ticketNumber)}" data-revision="${escapeHtml(h.revision ?? '00A')}">
+              <td>${systemLabel(h.system)}</td>
+              <td class="mono">${escapeHtml(h.ticketNumber)}${h.revision ? ` / ${escapeHtml(h.revision)}` : ''}</td>
+              <td>${h.overlapCount}</td>
+              <td>${h.concurrentCount}</td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+      <p class="muted">${area.overlaps.totalPairs.toLocaleString()} overlap pair(s), ${area.overlaps.concurrentPairs.toLocaleString()} concurrent</p>`
+        : '<p class="muted">No qualifying overlaps in this area.</p>'
+    }`;
+
+  el.querySelectorAll('.area-hotspot-row').forEach((tr) => {
+    tr.addEventListener('click', () =>
+      openDetail(tr.dataset.system, tr.dataset.ticket, tr.dataset.revision)
+    );
+  });
+}
+
+async function openStatsModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `<div class="modal modal-wide"><h2>Fleet stats</h2><p class="muted">Loadingâ€¦</p><button class="btn-secondary close-modal" type="button">Close</button></div>`;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector('.close-modal').addEventListener('click', () => backdrop.remove());
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+
+  try {
+    const { summary, trends } = await api.analyticsStats();
+    const t = summary.totals;
+    backdrop.querySelector('.modal').innerHTML = `
+      <h2>Fleet stats</h2>
+      <p class="muted">As of ${escapeHtml(summary.today)}</p>
+      <div class="kpi-grid">${kpiCardsHtml(t)}</div>
+      <div class="analytics-grid">
+        <div class="panel">
+          <h3>By system</h3>
+          <table>
+            <thead><tr><th>System</th><th>Total</th><th>Active</th><th>Pending</th><th>Blockers</th><th>Late</th><th>Geometry</th></tr></thead>
+            <tbody>
+              ${summary.bySystem
+                .map(
+                  (s) => `
+                <tr>
+                  <td>${systemLabel(s.system)}</td>
+                  <td>${s.total.toLocaleString()}</td>
+                  <td>${s.active.toLocaleString()}</td>
+                  <td>${s.badges.pending.toLocaleString()}</td>
+                  <td>${s.badges.blocker.toLocaleString()}</td>
+                  <td>${s.badges.late.toLocaleString()}</td>
+                  <td>${s.geometryCoveragePct}%</td>
+                </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h3>Ingest trend (30 days)</h3>
+          <table>
+            <thead><tr><th>Date</th><th>Dig Alert</th><th>USAN CA</th><th>USAN NV</th></tr></thead>
+            <tbody>
+              ${(trends.trend.length ? trends.trend.slice(-14) : [{ date: 'â€”' }])
+                .map(
+                  (row) => `
+                <tr>
+                  <td>${escapeHtml(row.date)}</td>
+                  <td>${row.digalert ?? 0}</td>
+                  <td>${row['usan-ca'] ?? 0}</td>
+                  <td>${row['usan-nv'] ?? 0}</td>
+                </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      ${summary.bySystem
+        .map(
+          (s) => `
+        <div class="panel">
+          <h3>${systemLabel(s.system)} â€” top work types</h3>
+          <table>
+            <thead><tr><th>Type</th><th>Count</th></tr></thead>
+            <tbody>
+              ${(s.workTypes.length ? s.workTypes : [{ label: 'â€”', count: 0 }])
+                .map((w) => `<tr><td>${escapeHtml(w.label)}</td><td>${w.count.toLocaleString()}</td></tr>`)
+                .join('')}
+            </tbody>
+          </table>
+        </div>`
+        )
+        .join('')}
+      ${
+        summary.ingestHealth?.recentJobs?.length
+          ? `<div class="panel">
+        <h3>Recent fetch jobs</h3>
+        <table>
+          <thead><tr><th>ID</th><th>Status</th><th>Errors</th><th>Updated</th></tr></thead>
+          <tbody>
+            ${summary.ingestHealth.recentJobs
+              .map(
+                (j) => `
+              <tr>
+                <td>${j.id}</td>
+                <td>${escapeHtml(String(j.status ?? ''))}</td>
+                <td>${j.error_count ?? 0}</td>
+                <td>${escapeHtml(String(j.updated_at ?? ''))}</td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>`
+          : ''
+      }
+      <button class="btn-secondary close-modal" type="button">Close</button>`;
+    backdrop.querySelector('.close-modal').addEventListener('click', () => backdrop.remove());
+  } catch (e) {
+    backdrop.querySelector('.modal').innerHTML = `
+      <h2>Fleet stats</h2><p class="error">${escapeHtml(e.message)}</p>
+      <button class="btn-secondary close-modal" type="button">Close</button>`;
+    backdrop.querySelector('.close-modal').addEventListener('click', () => backdrop.remove());
+  }
+}
+
+async function loadBrowseKpis() {
+  try {
+    state.browseKpis = await api.analyticsKpis();
+    const strip = document.getElementById('browse-kpi-strip');
+    if (strip && state.browseKpis) {
+      strip.innerHTML = kpiCardsHtml(state.browseKpis.totals);
+    }
+    const note = document.getElementById('browse-kpi-note');
+    if (note && state.browseKpis) {
+      note.textContent = `Fleet-wide as of ${state.browseKpis.today} Â· active = work window includes today`;
+    }
+  } catch {
+    /* KPI strip optional */
+  }
+}
+
 function renderBrowse() {
   const { startDate = '', endDate = '', ticketNumber = '' } = state.browseParams;
   app.innerHTML = `
+    <div class="panel browse-kpi-panel">
+      <div class="browse-kpi-header">
+        <div id="browse-kpi-strip" class="kpi-grid browse-kpi-grid">${state.browseKpis ? kpiCardsHtml(state.browseKpis.totals) : '<span class="muted">Loading KPIsâ€¦</span>'}</div>
+        <button class="btn btn-secondary btn-sm" id="browse-stats-btn" type="button">Stats</button>
+      </div>
+      <p id="browse-kpi-note" class="muted browse-kpi-note">${state.browseKpis ? `Fleet-wide as of ${state.browseKpis.today}` : ''}</p>
+    </div>
     <div class="panel browse-panel">
       <h2 class="panel-heading">Browse tickets</h2>
       <div class="browse-toolbar">
@@ -661,7 +888,7 @@ function renderBrowse() {
             <span class="filter-label">Date range</span>
             <div class="date-range">
               <label class="field-inline"><span>From</span><input type="date" id="start-date" value="${startDate}" /></label>
-              <span class="date-sep" aria-hidden="true">–</span>
+              <span class="date-sep" aria-hidden="true">â€“</span>
               <label class="field-inline"><span>To</span><input type="date" id="end-date" value="${endDate}" /></label>
             </div>
           </div>
@@ -684,17 +911,21 @@ function renderBrowse() {
           </div>
         </div>
         <div class="map-section">
-          <p class="map-hint">Map shows tickets on the current page only (blue Dig Alert, green USAN CA, orange USAN NV). Draw a rectangle to filter by area. Zoom in (17+) for polygons.</p>
+          <p class="map-hint">Draw a rectangle to filter tickets, show all tickets in the area on the map (up to 400), and load overlap stats.</p>
           <div id="browse-map-legend" class="browse-map-legend hidden" aria-hidden="true"></div>
           <div id="search-map"></div>
         </div>
       </div>
     </div>
-    <div class="panel"><div id="results">Loading…</div></div>
+    <div id="browse-area-insights" class="panel hidden"></div>
+    <div class="panel"><div id="results">Loadingâ€¦</div></div>
   `;
+
+  document.getElementById('browse-stats-btn')?.addEventListener('click', () => openStatsModal());
 
   setTimeout(() => {
     initSearchMap();
+    void loadBrowseKpis();
     runBrowseSearch(0);
     state.searchMap?.invalidateSize();
   }, 0);
@@ -717,7 +948,7 @@ function initSearchMap() {
 
   state.searchMap = L.map('search-map').setView([36.16, -115.15], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap',
+    attribution: 'Â© OpenStreetMap',
   }).addTo(state.searchMap);
 
   state.drawnGroup = new L.FeatureGroup();
@@ -904,9 +1135,9 @@ function renderBrowseMapTickets(fitBounds = false) {
   state.ticketPolygonGroup.clearLayers();
   const boundsLayers = [];
 
-  for (const t of state.browsePageTickets) {
+  for (const t of browseMapTicketSource()) {
     const color = BROWSE_SYSTEM_COLORS[t.system] ?? '#3b82f6';
-    const label = `${systemLabel(t.system)} — ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
+    const label = `${systemLabel(t.system)} â€” ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
     const polygonWkt = state.browsePolygonByKey[ticketPolygonKey(t)] ?? t.polygon_wkt;
     const latlngs = parseWktToLatLngs(polygonWkt);
 
@@ -942,7 +1173,7 @@ function renderBrowseMapTickets(fitBounds = false) {
 function updateBrowseMapLegend() {
   const legend = document.getElementById('browse-map-legend');
   if (!legend) return;
-  const systems = [...new Set(state.browsePageTickets.map((t) => t.system))];
+  const systems = [...new Set(browseMapTicketSource().map((t) => t.system))];
   if (!systems.length) {
     legend.classList.add('hidden');
     legend.innerHTML = '';
@@ -993,8 +1224,12 @@ function refreshBrowseMap(fitBounds = false) {
 
 function clearBrowseMap() {
   state.browsePageTickets = [];
+  state.browseMapTickets = [];
+  state.browseAreaInsights = null;
+  state.browseAreaError = null;
   state.browsePolygonByKey = {};
   refreshBrowseMap(false);
+  renderAreaInsightsPanel();
 }
 
 async function runBrowseSearch(page = 0) {
@@ -1010,6 +1245,8 @@ async function runBrowseSearch(page = 0) {
   if (page === 0) {
     state.browseParams = browseFiltersFromDom();
     state.browseBadges = browseBadgesFromDom();
+    state.browseAreaInsights = null;
+    state.browseAreaError = null;
   }
 
   const params = {
@@ -1019,12 +1256,45 @@ async function runBrowseSearch(page = 0) {
   };
 
   const resultsEl = document.getElementById('results');
-  resultsEl.textContent = 'Loading…';
+  resultsEl.textContent = 'Loadingâ€¦';
+  const hasBbox = !!state.drawLayer;
+
   try {
     state.browsePolygonByKey = {};
-    const { tickets, total } = await api.browseTickets(systems, params);
+    const areaParams = hasBbox
+      ? {
+          ...state.browseParams,
+          systems: systems.join(','),
+          fast: '1',
+        }
+      : null;
+
+    const listPromise = api.browseTickets(systems, params);
+    const mapPromise = hasBbox
+      ? api.browseTickets(systems, { ...state.browseParams, limit: 400, offset: 0 })
+      : null;
+    const areaPromise = hasBbox ? api.analyticsArea(areaParams).catch((e) => ({ error: e.message })) : null;
+
+    const [{ tickets, total }, mapResult, areaResult] = await Promise.all([
+      listPromise,
+      mapPromise,
+      areaPromise,
+    ]);
+
     state.browseTotal = total;
+    state.browsePageTickets = tickets;
+    state.browseMapTickets = hasBbox ? mapResult?.tickets ?? [] : tickets;
+
+    if (hasBbox && areaResult?.error) {
+      state.browseAreaError = areaResult.error;
+      state.browseAreaInsights = null;
+    } else if (hasBbox) {
+      state.browseAreaInsights = areaResult;
+      state.browseAreaError = null;
+    }
+
     renderBrowseResults(tickets, total, page, page === 0);
+    renderAreaInsightsPanel();
   } catch (e) {
     resultsEl.textContent = e.message;
     clearBrowseMap();
@@ -1077,7 +1347,7 @@ function renderFetch() {
     const system = sysSel.value;
     const ticket = document.getElementById('fetch-ticket').value.trim();
     const out = document.getElementById('fetch-result');
-    out.textContent = 'Fetching…';
+    out.textContent = 'Fetchingâ€¦';
     try {
       const body = system === 'digalert'
         ? { ticket, revision: document.getElementById('fetch-revision').value.trim() || '00A' }
@@ -1102,14 +1372,14 @@ function renderFetch() {
       out.textContent = 'Select systems and date range.';
       return;
     }
-    out.textContent = 'Starting…';
+    out.textContent = 'Startingâ€¦';
     try {
       const payload = { systems, startDate, endDate };
       const res = await api.createJob(payload);
       out.textContent = res.dedicatedScraper
         ? (res.message ||
-            `Job #${res.job?.id ?? '?'} started — scraper container running. See Jobs tab for progress.`)
-        : 'Job started — fetching continuously in background. Check Jobs tab for progress.';
+            `Job #${res.job?.id ?? '?'} started â€” scraper container running. See Jobs tab for progress.`)
+        : 'Job started â€” fetching continuously in background. Check Jobs tab for progress.';
       await refreshStopped();
       setView('jobs');
     } catch (e) {
@@ -1125,7 +1395,7 @@ function jobListStatusLabel(job) {
     const fetched =
       (job.digalert_fetched || 0) + (job.usan_ca_fetched || 0) + (job.usan_nv_fetched || 0);
     if (job.status === 'running') {
-      return fetched ? `${job.status} (container · ${fetched} tickets)` : `${job.status} (container)`;
+      return fetched ? `${job.status} (container Â· ${fetched} tickets)` : `${job.status} (container)`;
     }
     return `${job.status} (container)`;
   }
@@ -1138,9 +1408,9 @@ function jobStatusLabel(job, progress) {
       const fetched =
         (job.digalert_fetched || 0) + (job.usan_ca_fetched || 0) + (job.usan_nv_fetched || 0);
       if (progress && progress.systemsComplete < progress.systemsActive) {
-        return `running (container · ${fetched} tickets)`;
+        return `running (container Â· ${fetched} tickets)`;
       }
-      return fetched ? `running (container · ${fetched} tickets)` : 'running (container)';
+      return fetched ? `running (container Â· ${fetched} tickets)` : 'running (container)';
     }
     return job.status;
   }
@@ -1160,7 +1430,7 @@ function bindJobsTableEvents(el) {
       const label = btn.dataset.status === 'cancelled' ? 'Resume cancelled' : 'Resume';
       if (!confirm(`${label} job #${id}?`)) return;
       btn.disabled = true;
-      btn.textContent = 'Resuming…';
+      btn.textContent = 'Resumingâ€¦';
       try {
         await api.resumeJob(id);
         refreshJobsList();
@@ -1198,7 +1468,7 @@ function renderJobsTable(jobs) {
           <tr>
             <td>${j.id}</td>
             <td>${jobListStatusLabel(j)}${j.status === 'running' ? ' <span class="muted">(auto-refreshes every 30s)</span>' : ''}</td>
-            <td>${j.start_date} → ${j.end_date}</td>
+            <td>${j.start_date} â†’ ${j.end_date}</td>
             <td class="mono">${[
               j.include_digalert ? 'DA' : '',
               j.include_usan_ca ? 'CA' : '',
@@ -1251,14 +1521,14 @@ async function renderJobs() {
   app.innerHTML = `
     <div class="panel">
       <h2>Auto-fetch settings</h2>
-      <div id="settings-form">Loading…</div>
+      <div id="settings-form">Loadingâ€¦</div>
     </div>
     <div class="panel">
       <div class="row" style="align-items:center;justify-content:space-between;margin-bottom:0.75rem">
         <h2 style="margin:0">Jobs</h2>
         <button class="btn-secondary" id="jobs-refresh-btn" type="button">Refresh</button>
       </div>
-      <div id="jobs-list">Loading…</div>
+      <div id="jobs-list">Loadingâ€¦</div>
     </div>
   `;
   try {
@@ -1290,7 +1560,7 @@ async function renderJobs() {
     document.getElementById('jobs-refresh-btn').addEventListener('click', async () => {
       const btn = document.getElementById('jobs-refresh-btn');
       btn.disabled = true;
-      btn.textContent = 'Refreshing…';
+      btn.textContent = 'Refreshingâ€¦';
       await refreshJobsList();
       btn.disabled = false;
       btn.textContent = 'Refresh';
@@ -1320,7 +1590,7 @@ function systemBlock(label, sys, jobStatus) {
     : '<span class="badge badge-pending">In progress</span>';
   const note =
     sys.done && jobStatus === 'running'
-      ? '<p class="muted">This system finished — job continues for remaining systems.</p>'
+      ? '<p class="muted">This system finished â€” job continues for remaining systems.</p>'
       : '';
   return `
     <div class="system-progress ${sys.done ? 'done' : ''}">
@@ -1329,14 +1599,14 @@ function systemBlock(label, sys, jobStatus) {
       <p>${sys.detail}</p>
       ${note}
       ${progressBarHtml(sys.dateProgressPct)}
-      <p class="mono muted">Fetched: ${sys.fetched}${sys.nextTicket ? ` · Next: ${sys.nextTicket}` : ''}</p>
+      <p class="mono muted">Fetched: ${sys.fetched}${sys.nextTicket ? ` Â· Next: ${sys.nextTicket}` : ''}</p>
     </div>`;
 }
 
 async function showJobProgress(jobId) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
-  backdrop.innerHTML = `<div class="modal"><p>Loading job #${jobId}…</p></div>`;
+  backdrop.innerHTML = `<div class="modal"><p>Loading job #${jobId}â€¦</p></div>`;
   document.body.appendChild(backdrop);
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) backdrop.remove();
@@ -1348,14 +1618,14 @@ async function showJobProgress(jobId) {
     backdrop.querySelector('.modal').innerHTML = `
       <h2>Job #${p.jobId} progress</h2>
       <p><strong>Status:</strong> ${jobStatusLabel(job, p)}
-        ${fetchStopped ? ' · <span class="badge badge-blocker">ALL STOP active</span>' : ''}</p>
+        ${fetchStopped ? ' Â· <span class="badge badge-blocker">ALL STOP active</span>' : ''}</p>
       ${p.status === 'running' && p.systemsComplete < p.systemsActive
-        ? `<p class="muted">${p.systemsComplete} of ${p.systemsActive} systems finished scanning — job is still running.</p>`
+        ? `<p class="muted">${p.systemsComplete} of ${p.systemsActive} systems finished scanning â€” job is still running.</p>`
         : ''}
-      <p><strong>Range:</strong> ${p.dateRange.start} → ${p.dateRange.end}</p>
-      <p><strong>Triggered by:</strong> ${p.triggeredBy === 'container' ? 'container scraper' : p.triggeredBy}${p.triggeredBy === 'container' ? '' : ` · <strong>Parallel batch:</strong> ${p.batchSize} tickets/system/wave (continuous)`}</p>
+      <p><strong>Range:</strong> ${p.dateRange.start} â†’ ${p.dateRange.end}</p>
+      <p><strong>Triggered by:</strong> ${p.triggeredBy === 'container' ? 'container scraper' : p.triggeredBy}${p.triggeredBy === 'container' ? '' : ` Â· <strong>Parallel batch:</strong> ${p.batchSize} tickets/system/wave (continuous)`}</p>
       <p class="muted">Updated: ${p.updatedAt}</p>
-      ${p.errorCount ? `<p class="badge badge-blocker">Errors: ${p.errorCount}${p.lastError ? ` — ${p.lastError}` : ''}</p>` : ''}
+      ${p.errorCount ? `<p class="badge badge-blocker">Errors: ${p.errorCount}${p.lastError ? ` â€” ${p.lastError}` : ''}</p>` : ''}
       ${systemBlock('Dig Alert', p.systems.digalert, p.status)}
       ${systemBlock('USAN CA', p.systems.usanCa, p.status)}
       ${systemBlock('USAN NV', p.systems.usanNv, p.status)}
@@ -1370,7 +1640,7 @@ async function showJobProgress(jobId) {
       resumeBtn.addEventListener('click', async () => {
         if (!confirm(`Resume job #${jobId}?`)) return;
         resumeBtn.disabled = true;
-        resumeBtn.textContent = 'Resuming…';
+        resumeBtn.textContent = 'Resumingâ€¦';
         try {
           await api.resumeJob(jobId);
           backdrop.remove();
@@ -1387,7 +1657,7 @@ async function showJobProgress(jobId) {
       stopBtn.addEventListener('click', async () => {
         if (!confirm(`Stop job #${jobId}?`)) return;
         stopBtn.disabled = true;
-        stopBtn.textContent = 'Stopping…';
+        stopBtn.textContent = 'Stoppingâ€¦';
         await api.cancelJob(jobId);
         backdrop.remove();
         refreshJobsList();
@@ -1401,217 +1671,10 @@ async function showJobProgress(jobId) {
   }
 }
 
-async function renderAnalytics() {
-  app.innerHTML = '<div class="panel">Loading analytics…</div>';
-  try {
-    const [summary, trends, hotspotsData] = await Promise.all([
-      api.analyticsSummary(),
-      api.analyticsTrends({ days: 30 }),
-      api.analyticsOverlaps({ limit: 20 }).catch(() => ({ hotspots: [] })),
-    ]);
-    state.analytics = { summary, trends, hotspots: hotspotsData.hotspots ?? [] };
-  } catch (e) {
-    app.innerHTML = `<div class="panel">${escapeHtml(e.message)}</div>`;
-    return;
-  }
-
-  const { summary, trends, hotspots } = state.analytics;
-  const t = summary.totals;
-
-  app.innerHTML = `
-    <div class="panel">
-      <h2 class="panel-heading">Analytics</h2>
-      <p class="muted">As of ${escapeHtml(summary.today)} · active = work window includes today</p>
-      <div class="kpi-grid">
-        <div class="kpi-card"><span class="kpi-label">Active</span><span class="kpi-value">${t.active.toLocaleString()}</span></div>
-        <div class="kpi-card"><span class="kpi-label">Pending</span><span class="kpi-value kpi-pending">${t.pending.toLocaleString()}</span></div>
-        <div class="kpi-card"><span class="kpi-label">Blockers</span><span class="kpi-value kpi-blocker">${t.blockers.toLocaleString()}</span></div>
-        <div class="kpi-card"><span class="kpi-label">Late</span><span class="kpi-value kpi-late">${t.late.toLocaleString()}</span></div>
-        <div class="kpi-card"><span class="kpi-label">Total stored</span><span class="kpi-value">${t.total.toLocaleString()}</span></div>
-        <div class="kpi-card"><span class="kpi-label">Geometry</span><span class="kpi-value">${t.geometryCoveragePct}%</span></div>
-        <div class="kpi-card"><span class="kpi-label">Overlaps</span><span class="kpi-value">${(summary.overlaps?.total ?? 0).toLocaleString()}</span></div>
-        <div class="kpi-card"><span class="kpi-label">Concurrent overlaps</span><span class="kpi-value">${(summary.overlaps?.concurrent ?? 0).toLocaleString()}</span></div>
-      </div>
-    </div>
-    <div class="analytics-grid">
-      <div class="analytics-stack">
-        <div class="panel">
-          <h3>By system</h3>
-          <table>
-            <thead><tr><th>System</th><th>Total</th><th>Active</th><th>Pending</th><th>Blockers</th><th>Late</th><th>Geometry</th></tr></thead>
-            <tbody>
-              ${summary.bySystem
-                .map(
-                  (s) => `
-                <tr>
-                  <td>${systemLabel(s.system)}</td>
-                  <td>${s.total.toLocaleString()}</td>
-                  <td>${s.active.toLocaleString()}</td>
-                  <td>${s.badges.pending.toLocaleString()}</td>
-                  <td>${s.badges.blocker.toLocaleString()}</td>
-                  <td>${s.badges.late.toLocaleString()}</td>
-                  <td>${s.geometryCoveragePct}%</td>
-                </tr>`
-                )
-                .join('')}
-            </tbody>
-          </table>
-        </div>
-        <div class="panel">
-          <h3>Ingest trend (30 days)</h3>
-          <table>
-            <thead><tr><th>Date</th><th>Dig Alert</th><th>USAN CA</th><th>USAN NV</th></tr></thead>
-            <tbody>
-              ${(trends.trend.length
-                ? trends.trend.slice(-14)
-                : [{ date: '—' }]
-              )
-                .map(
-                  (row) => `
-                <tr>
-                  <td>${escapeHtml(row.date)}</td>
-                  <td>${row.digalert ?? 0}</td>
-                  <td>${row['usan-ca'] ?? 0}</td>
-                  <td>${row['usan-nv'] ?? 0}</td>
-                </tr>`
-                )
-                .join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div class="panel">
-        <h3>Top work types</h3>
-        ${summary.bySystem
-          .map(
-            (s) => `
-          <h4 class="analytics-subheading">${systemLabel(s.system)}</h4>
-          <table>
-            <thead><tr><th>Type</th><th>Count</th></tr></thead>
-            <tbody>
-              ${(s.workTypes.length
-                ? s.workTypes
-                : [{ label: '—', count: 0 }]
-              )
-                .map((w) => `<tr><td>${escapeHtml(w.label)}</td><td>${w.count.toLocaleString()}</td></tr>`)
-                .join('')}
-            </tbody>
-          </table>`
-          )
-          .join('')}
-      </div>
-    </div>
-    ${
-      hotspots.length
-        ? `<div class="panel">
-      <h3>Overlap hotspots</h3>
-      <p class="muted">Tickets with the most overlapping dig areas. Click a row or map marker to open detail.</p>
-      <div id="analytics-map" class="analytics-map"></div>
-      <table class="analytics-hotspots-table">
-        <thead><tr><th>System</th><th>Ticket</th><th>Overlaps</th><th>Concurrent</th></tr></thead>
-        <tbody>
-          ${hotspots
-            .map(
-              (h) => `
-            <tr class="clickable analytics-hotspot-row" data-system="${h.system}" data-ticket="${escapeHtml(h.ticketNumber)}" data-revision="${escapeHtml(h.revision ?? '00A')}">
-              <td>${systemLabel(h.system)}</td>
-              <td class="mono">${escapeHtml(h.ticketNumber)}${h.revision ? ` / ${escapeHtml(h.revision)}` : ''}</td>
-              <td>${h.overlapCount}</td>
-              <td>${h.concurrentCount}</td>
-            </tr>`
-            )
-            .join('')}
-        </tbody>
-      </table>
-    </div>`
-        : ''
-    }
-    ${
-      state.isAdmin
-        ? `<div class="panel">
-      <h3>Admin — overlap backfill</h3>
-      <p class="muted">Rebuild overlap rows for stored tickets (batch of 500). New ingests compute overlaps automatically.</p>
-      <div class="btn-row">
-        <button class="btn btn-secondary" id="rebuild-overlaps-da" type="button">Rebuild Dig Alert</button>
-        <button class="btn btn-secondary" id="rebuild-overlaps-ca" type="button">Rebuild USAN CA</button>
-        <button class="btn btn-secondary" id="rebuild-overlaps-nv" type="button">Rebuild USAN NV</button>
-      </div>
-      <p id="rebuild-overlaps-msg" class="muted"></p>
-    </div>`
-        : ''
-    }`;
-
-  app.querySelectorAll('.analytics-hotspot-row').forEach((tr) => {
-    tr.addEventListener('click', () =>
-      openDetail(tr.dataset.system, tr.dataset.ticket, tr.dataset.revision)
-    );
-  });
-
-  if (hotspots.length) {
-    setTimeout(() => initAnalyticsMap(hotspots), 0);
-  }
-
-  if (state.isAdmin) {
-    async function runRebuild(system, btn) {
-      const msg = document.getElementById('rebuild-overlaps-msg');
-      btn.disabled = true;
-      msg.textContent = `Rebuilding ${systemLabel(system)}…`;
-      try {
-        let offset = 0;
-        let totalProcessed = 0;
-        let totalOverlaps = 0;
-        for (;;) {
-          const result = await api.rebuildOverlaps({ system, limit: 500, offset });
-          totalProcessed += result.processed;
-          totalOverlaps += result.overlapsFound;
-          offset = result.nextOffset;
-          msg.textContent = `${systemLabel(system)}: processed ${totalProcessed}, overlaps ${totalOverlaps}…`;
-          if (result.processed < 500) break;
-        }
-        msg.textContent = `Done — ${systemLabel(system)}: ${totalProcessed} tickets, ${totalOverlaps} overlap rows written.`;
-      } catch (e) {
-        msg.textContent = e.message;
-      } finally {
-        btn.disabled = false;
-      }
-    }
-    document.getElementById('rebuild-overlaps-da')?.addEventListener('click', (e) => runRebuild('digalert', e.target));
-    document.getElementById('rebuild-overlaps-ca')?.addEventListener('click', (e) => runRebuild('usan-ca', e.target));
-    document.getElementById('rebuild-overlaps-nv')?.addEventListener('click', (e) => runRebuild('usan-nv', e.target));
-  }
-}
-
-function initAnalyticsMap(hotspots) {
-  if (state.analyticsMap) {
-    state.analyticsMap.remove();
-    state.analyticsMap = null;
-  }
-  const el = document.getElementById('analytics-map');
-  if (!el) return;
-  state.analyticsMap = L.map('analytics-map').setView([36.16, -115.15], 9);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap',
-  }).addTo(state.analyticsMap);
-
-  const bounds = [];
-  for (const h of hotspots) {
-    if (h.centroidLat == null || h.centroidLon == null) continue;
-    const marker = L.circleMarker([h.centroidLat, h.centroidLon], {
-      radius: Math.min(8 + h.overlapCount, 20),
-      color: '#f97316',
-      fillColor: '#f97316',
-      fillOpacity: 0.7,
-    }).addTo(state.analyticsMap);
-    marker.bindPopup(`${h.ticketNumber}: ${h.overlapCount} overlaps`);
-    marker.on('click', () => openDetail(h.system, h.ticketNumber, h.revision ?? '00A'));
-    bounds.push([h.centroidLat, h.centroidLon]);
-  }
-  if (bounds.length) state.analyticsMap.fitBounds(bounds, { padding: [24, 24] });
-}
 
 async function openDetail(system, ticketNumber, revision) {
   state.detailSystem = system;
-  const title = `${systemLabel(system)} — ${ticketNumber}${revision && revision !== '00A' ? ` / ${revision}` : ''}`;
+  const title = `${systemLabel(system)} â€” ${ticketNumber}${revision && revision !== '00A' ? ` / ${revision}` : ''}`;
   openDetailModal(title);
   try {
     const detail = await api.getTicket(system, ticketNumber, revision);
@@ -1688,7 +1751,7 @@ function openDetailModal(title) {
         <h2 class="detail-modal-title" id="detail-modal-title">${escapeHtml(title)}</h2>
         <button class="btn-secondary detail-modal-close" type="button">Close</button>
       </div>
-      <div class="detail-modal-body"><p class="muted">Loading detail…</p></div>
+      <div class="detail-modal-body"><p class="muted">Loading detailâ€¦</p></div>
     </div>`;
   document.body.appendChild(backdrop);
   state.detailBackdrop = backdrop;
@@ -1713,7 +1776,7 @@ function renderDetail() {
 
   const titleEl = state.detailBackdrop?.querySelector('.detail-modal-title');
   if (titleEl) {
-    titleEl.textContent = `${systemLabel(system)} — ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
+    titleEl.textContent = `${systemLabel(system)} â€” ${t.ticket_number}${t.revision ? ` / ${t.revision}` : ''}`;
   }
 
   body.innerHTML = `
@@ -1736,7 +1799,7 @@ function renderDetail() {
               <tr class="clickable overlap-row" data-system="${o.system}" data-ticket="${escapeHtml(o.ticketNumber)}" data-revision="${escapeHtml(o.revision ?? '00A')}">
                 <td>${systemLabel(o.system)}</td>
                 <td class="mono">${escapeHtml(o.ticketNumber)}${o.revision ? ` / ${escapeHtml(o.revision)}` : ''}</td>
-                <td>${o.overlapKind === 'bbox' ? '<span class="muted" title="Bbox-only — polygon missing">Bbox</span>' : 'Polygon'}</td>
+                <td>${o.overlapKind === 'bbox' ? '<span class="muted" title="Bbox-only â€” polygon missing">Bbox</span>' : 'Polygon'}</td>
                 <td>${o.concurrent ? '<span class="badge badge-pending">Yes</span>' : '<span class="muted">No</span>'}</td>
               </tr>`
               )
@@ -1797,7 +1860,7 @@ function renderDetail() {
 
     state.detailMap = L.map(mapEl, { maxZoom: DETAIL_MAP_MAX_ZOOM }).setView([36.16, -115.15], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap',
+      attribution: 'Â© OpenStreetMap',
       maxNativeZoom: DETAIL_MAP_TILE_NATIVE_MAX_ZOOM,
       maxZoom: DETAIL_MAP_MAX_ZOOM,
     }).addTo(state.detailMap);
@@ -1838,7 +1901,7 @@ function renderDetail() {
     if (queryBbox) {
       if (utilityStatusEl) {
         utilityStatusEl.classList.remove('hidden');
-        utilityStatusEl.textContent = 'Loading utility layers…';
+        utilityStatusEl.textContent = 'Loading utility layersâ€¦';
       }
       try {
         const { layers: utilityLayers, totalFeatures, notes } = await loadUtilityLayersOnMap(
@@ -1857,7 +1920,7 @@ function renderDetail() {
           if (utilityLayers.length) {
             utilityStatusEl.textContent = `Loaded ${utilityLayers.length} utility layer(s), ${totalFeatures} feature(s) within 300 ft of ticket.`;
           } else if (notes?.length) {
-            utilityStatusEl.textContent = notes.join(' · ');
+            utilityStatusEl.textContent = notes.join(' Â· ');
           } else {
             utilityStatusEl.textContent = 'No utility features found within 300 ft of ticket.';
           }
@@ -1882,13 +1945,13 @@ async function renderAdmin() {
     <div class="panel">
       <h2>User feedback</h2>
       <p class="muted">Messages submitted via the Feedback button in the header.</p>
-      <p id="admin-feedback-unread" class="badge badge-ok">Loading…</p>
-      <div id="feedback-list">Loading…</div>
+      <p id="admin-feedback-unread" class="badge badge-ok">Loadingâ€¦</p>
+      <div id="feedback-list">Loadingâ€¦</div>
     </div>
     <div class="panel">
       <h2>Admin users</h2>
       <p class="muted">Only explicitly granted admins can use Fetch and Jobs. Signing in with @aspadeco.com does not grant admin access.</p>
-      <div id="admin-list">Loading…</div>
+      <div id="admin-list">Loadingâ€¦</div>
       <form class="admin-add-form" id="admin-add-form">
         <label>Add admin email
           <input type="email" id="admin-email" placeholder="name@aspadeco.com" required />
@@ -1902,13 +1965,6 @@ async function renderAdmin() {
       <p class="muted">Permanently delete all ticket data (Dig Alert, USAN CA, USAN NV). Jobs, settings, and admin users are not affected.</p>
       <button class="btn-danger" id="nuke-tickets-btn" type="button">Nuke tickets in DB</button>
       <p id="nuke-message" class="muted"></p>
-    </div>
-    <div class="panel">
-      <h2>Overlap settings</h2>
-      <p class="muted">Cross-system overlap compares Dig Alert tickets against USAN when enabled (slower ingest).</p>
-      <label class="chip-check"><input type="checkbox" id="overlap-cross-system" /><span>Enable cross-system overlaps</span></label>
-      <label class="chip-check"><input type="checkbox" id="overlap-prune-enabled" /><span>Prune stale overlap rows (90+ days expired)</span></label>
-      <p id="overlap-settings-msg" class="muted"></p>
     </div>
   `;
 
@@ -1942,7 +1998,7 @@ async function renderAdmin() {
                 <td>${escapeHtml(f.created_at)}</td>
                 <td class="mono">${escapeHtml(f.user_email)}</td>
                 <td>${escapeHtml(f.message)}</td>
-                <td class="mono muted">${f.page_url ? escapeHtml(f.page_url) : '—'}</td>
+                <td class="mono muted">${f.page_url ? escapeHtml(f.page_url) : 'â€”'}</td>
                 <td>
                   ${
                     unread
@@ -1990,12 +2046,12 @@ async function renderAdmin() {
               <tr>
                 <td class="mono">${escapeHtml(a.email)}</td>
                 <td>${a.source === 'env' ? 'Super admin' : 'Added'}</td>
-                <td>${a.created_at ? escapeHtml(a.created_at) : '—'}</td>
+                <td>${a.created_at ? escapeHtml(a.created_at) : 'â€”'}</td>
                 <td>
                   ${
                     a.source === 'db'
                       ? `<button class="btn-danger btn-sm remove-admin-btn" data-email="${escapeHtml(a.email)}" type="button">Remove</button>`
-                      : '<span class="muted">—</span>'
+                      : '<span class="muted">â€”</span>'
                   }
                 </td>
               </tr>`
@@ -2031,7 +2087,7 @@ async function renderAdmin() {
     const msg = document.getElementById('admin-message');
     const email = input.value.trim();
     if (!email) return;
-    msg.textContent = 'Adding…';
+    msg.textContent = 'Addingâ€¦';
     try {
       await api.addAdmin(email);
       input.value = '';
@@ -2044,12 +2100,12 @@ async function renderAdmin() {
 
   document.getElementById('nuke-tickets-btn').addEventListener('click', async () => {
     if (!confirm('Delete ALL tickets from the database? This cannot be undone.')) return;
-    if (!confirm('Last chance — permanently wipe every stored ticket?')) return;
+    if (!confirm('Last chance â€” permanently wipe every stored ticket?')) return;
 
     const btn = document.getElementById('nuke-tickets-btn');
     const msg = document.getElementById('nuke-message');
     btn.disabled = true;
-    msg.textContent = 'Deleting…';
+    msg.textContent = 'Deletingâ€¦';
     try {
       const result = await api.nukeTickets();
       msg.textContent = `Deleted ${result.total} rows across all ticket tables.`;
@@ -2062,35 +2118,10 @@ async function renderAdmin() {
 
   await refreshFeedbackList();
   await refreshAdminList();
-
-  try {
-    const overlapSettings = await api.getOverlapSettings();
-    document.getElementById('overlap-cross-system').checked = !!overlapSettings.crossSystem;
-    document.getElementById('overlap-prune-enabled').checked = !!overlapSettings.pruneEnabled;
-  } catch {
-    /* ignore */
-  }
-
-  async function saveOverlapSettings() {
-    const msg = document.getElementById('overlap-settings-msg');
-    try {
-      await api.putOverlapSettings({
-        crossSystem: document.getElementById('overlap-cross-system').checked,
-        pruneEnabled: document.getElementById('overlap-prune-enabled').checked,
-      });
-      msg.textContent = 'Overlap settings saved.';
-    } catch (e) {
-      msg.textContent = e.message;
-    }
-  }
-
-  document.getElementById('overlap-cross-system')?.addEventListener('change', saveOverlapSettings);
-  document.getElementById('overlap-prune-enabled')?.addEventListener('change', saveOverlapSettings);
 }
 
 function render() {
   if (state.view === 'browse') renderBrowse();
-  else if (state.view === 'analytics') renderAnalytics();
   else if (state.view === 'fetch') renderFetch();
   else if (state.view === 'jobs') renderJobs();
   else if (state.view === 'admin') renderAdmin();
