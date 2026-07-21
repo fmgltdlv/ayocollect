@@ -2,12 +2,14 @@ import { apiBase } from './api.js';
 
 const MAP_PAGE_SIZE = 400;
 const ZOOM_CLUSTERS_UNTIL = 13;
+const DAY_OPTIONS = [7, 14, 28];
 
-const PUBLIC_SYSTEM = 'usan-nv';
 const PUBLIC_SYSTEM_COLOR = '#f97316';
 
 const statsEl = document.getElementById('public-stats');
 const rangeEl = document.getElementById('public-range');
+const mapHintEl = document.getElementById('public-map-hint');
+const dayFiltersEl = document.getElementById('public-day-filters');
 const legendEl = document.getElementById('public-map-legend');
 const paginationEl = document.getElementById('public-map-pagination');
 
@@ -17,6 +19,7 @@ let tickets = [];
 let total = 0;
 let mapPage = 0;
 let range = null;
+let selectedDays = readDaysFromUrl();
 
 function escapeHtml(value) {
   return String(value)
@@ -28,6 +31,27 @@ function escapeHtml(value) {
 
 function systemLabel() {
   return 'USAN NV';
+}
+
+function readDaysFromUrl() {
+  const raw = Number(new URLSearchParams(window.location.search).get('days') ?? 7);
+  return DAY_OPTIONS.includes(raw) ? raw : 7;
+}
+
+function daysQuery() {
+  return `days=${selectedDays}`;
+}
+
+function syncDaysToUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.set('days', String(selectedDays));
+  window.history.replaceState({}, '', url);
+}
+
+function updateDayFilterButtons() {
+  dayFiltersEl?.querySelectorAll('.public-day-btn').forEach((btn) => {
+    btn.classList.toggle('active', Number(btn.dataset.days) === selectedDays);
+  });
 }
 
 function formatDate(iso) {
@@ -195,6 +219,7 @@ function renderPagination() {
 function renderStats(summary) {
   const totalCount = summary.totals?.total ?? 0;
   const activeCount = summary.totals?.active ?? 0;
+  const days = range?.days ?? selectedDays;
 
   statsEl.innerHTML = `
     <div class="kpi-grid public-kpi-grid">
@@ -207,25 +232,32 @@ function renderStats(summary) {
         <span class="kpi-value">${activeCount.toLocaleString()}</span>
       </div>
     </div>
-    <p class="browse-stats-hint muted">Counts include USAN NV tickets whose work window overlaps the last 7 days.</p>`;
+    <p class="browse-stats-hint muted">Counts include USAN NV tickets whose work window overlaps the last ${days} days.</p>`;
 }
 
 function renderRange() {
   if (!rangeEl || !range) return;
   rangeEl.textContent = `${formatDate(range.startDate)} – ${formatDate(range.endDate)} · USAN NV · last ${range.days} days`;
+  if (mapHintEl) {
+    mapHintEl.textContent = `Pins show USAN NV tickets with work windows in the last ${range.days} days. Zoom in to see individual locations.`;
+  }
 }
 
 async function loadSummary() {
-  const summary = await publicRequest('/public/summary');
+  const summary = await publicRequest(`/public/summary?${daysQuery()}`);
   range = summary.range ?? range;
+  selectedDays = range?.days ?? selectedDays;
   renderRange();
   renderStats(summary);
 }
 
 async function loadTickets(page = 0, fitBounds = true) {
   mapPage = page;
-  const data = await publicRequest(`/public/tickets?limit=${MAP_PAGE_SIZE}&offset=${page * MAP_PAGE_SIZE}`);
+  const data = await publicRequest(
+    `/public/tickets?${daysQuery()}&limit=${MAP_PAGE_SIZE}&offset=${page * MAP_PAGE_SIZE}`
+  );
   range = data.range ?? range;
+  selectedDays = range?.days ?? selectedDays;
   tickets = data.tickets ?? [];
   total = data.total ?? tickets.length;
   renderRange();
@@ -233,10 +265,34 @@ async function loadTickets(page = 0, fitBounds = true) {
   renderPagination();
 }
 
+async function reloadData() {
+  syncDaysToUrl();
+  updateDayFilterButtons();
+  statsEl.textContent = 'Loading ticket counts…';
+  if (paginationEl) {
+    paginationEl.classList.remove('hidden');
+    paginationEl.innerHTML = '<span class="muted">Loading map tickets…</span>';
+  }
+  await Promise.all([loadSummary(), loadTickets(0, true)]);
+}
+
+function initDayFilters() {
+  dayFiltersEl?.addEventListener('click', (event) => {
+    const btn = event.target.closest('.public-day-btn');
+    if (!btn) return;
+    const days = Number(btn.dataset.days);
+    if (!DAY_OPTIONS.includes(days) || days === selectedDays) return;
+    selectedDays = days;
+    void reloadData();
+  });
+  updateDayFilterButtons();
+}
+
 async function boot() {
   initMap();
+  initDayFilters();
   try {
-    await Promise.all([loadSummary(), loadTickets(0, true)]);
+    await reloadData();
     map.invalidateSize();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

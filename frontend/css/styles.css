@@ -949,6 +949,33 @@ tr.clickable td.ticket-refresh-col {
   margin-top: 0;
 }
 
+.public-day-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.public-day-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.public-day-btn:hover {
+  border-color: var(--accent);
+}
+
+.public-day-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .browse-stats-hint {
   margin: 0.25rem 0 0;
   font-size: 0.85rem;

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>USAN NV 811 Ticket Activity — Last 7 Days</title>
+  <title>USAN NV 811 Ticket Activity</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
@@ -13,7 +13,12 @@
   <header class="header">
     <div>
       <h1>USAN NV 811 Ticket Activity</h1>
-      <p id="public-range" class="public-subtitle muted">Loading last 7 days of Nevada tickets…</p>
+      <p id="public-range" class="public-subtitle muted">Loading Nevada tickets…</p>
+      <div id="public-day-filters" class="public-day-filters" role="group" aria-label="Time range">
+        <button type="button" class="public-day-btn active" data-days="7">7 days</button>
+        <button type="button" class="public-day-btn" data-days="14">14 days</button>
+        <button type="button" class="public-day-btn" data-days="28">28 days</button>
+      </div>
     </div>
     <div class="header-actions">
       <a class="btn btn-secondary btn-sm" href="/">Staff sign-in</a>
@@ -28,7 +33,7 @@
     <section class="panel public-map-panel">
       <div class="public-map-header">
         <h2>Ticket map</h2>
-        <p class="muted public-map-hint">Pins show USAN NV tickets with work windows in the last 7 days. Zoom in to see individual locations.</p>
+        <p id="public-map-hint" class="muted public-map-hint">Pins show USAN NV tickets with work windows in the selected range. Zoom in to see individual locations.</p>
       </div>
       <div id="public-map" class="public-map"></div>
       <div id="public-map-legend" class="browse-map-legend hidden"></div>

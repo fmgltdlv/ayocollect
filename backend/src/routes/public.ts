@@ -6,17 +6,28 @@ import type { Env, TicketSystem } from '../types';
 type HonoEnv = { Bindings: Env };
 
 const PUBLIC_SYSTEMS: TicketSystem[] = ['usan-nv'];
-const PUBLIC_DAYS = 7;
+const PUBLIC_DAY_OPTIONS = [7, 14, 28] as const;
+export type PublicDays = (typeof PUBLIC_DAY_OPTIONS)[number];
+const PUBLIC_DEFAULT_DAYS: PublicDays = 7;
 const PUBLIC_MAX_LIMIT = BROWSE_MAP_PAGE_SIZE;
 
-export function publicLast7Days(): { startDate: string; endDate: string; days: number } {
+export function parsePublicDays(raw: string | undefined): PublicDays {
+  const days = Number(raw ?? PUBLIC_DEFAULT_DAYS);
+  return PUBLIC_DAY_OPTIONS.includes(days as PublicDays) ? (days as PublicDays) : PUBLIC_DEFAULT_DAYS;
+}
+
+export function publicDateRange(days: PublicDays = PUBLIC_DEFAULT_DAYS): {
+  startDate: string;
+  endDate: string;
+  days: PublicDays;
+} {
   const end = new Date();
   const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - (PUBLIC_DAYS - 1));
+  start.setUTCDate(start.getUTCDate() - (days - 1));
   return {
     startDate: start.toISOString().slice(0, 10),
     endDate: end.toISOString().slice(0, 10),
-    days: PUBLIC_DAYS,
+    days,
   };
 }
 
@@ -69,7 +80,8 @@ function publicSummary(summary: Awaited<ReturnType<typeof getAnalyticsSummary>>)
 export const publicRoutes = new Hono<HonoEnv>();
 
 publicRoutes.get('/summary', async (c) => {
-  const range = publicLast7Days();
+  const days = parsePublicDays(c.req.query('days'));
+  const range = publicDateRange(days);
   const summary = await getAnalyticsSummary(c.env.DB, {
     startDate: range.startDate,
     endDate: range.endDate,
@@ -85,7 +97,8 @@ publicRoutes.get('/summary', async (c) => {
 });
 
 publicRoutes.get('/tickets', async (c) => {
-  const range = publicLast7Days();
+  const days = parsePublicDays(c.req.query('days'));
+  const range = publicDateRange(days);
   const limit = Math.min(Math.max(Number(c.req.query('limit') ?? PUBLIC_MAX_LIMIT), 1), PUBLIC_MAX_LIMIT);
   const offset = Math.max(Number(c.req.query('offset') ?? 0), 0);
 
