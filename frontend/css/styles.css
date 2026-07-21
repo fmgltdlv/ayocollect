@@ -805,6 +805,7 @@ tr.clickable td.ticket-refresh-col {
   align-items: center;
   justify-content: center;
   filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.55));
+  cursor: pointer;
 }
 
 .browse-pin-core {
@@ -906,6 +907,83 @@ tr.clickable td.ticket-refresh-col {
 .kpi-pending { color: var(--pending); }
 .kpi-blocker { color: var(--blocker); }
 .kpi-late { color: var(--late); }
+
+.public-page .header h1 {
+  margin: 0;
+}
+
+.public-subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+}
+
+.public-main {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+.public-stats-panel,
+.public-map-panel {
+  margin: 0;
+}
+
+.public-map-header h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+}
+
+.public-map-hint {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.public-map {
+  height: min(62vh, 640px);
+  min-height: 320px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.public-detail-map {
+  height: 240px;
+  min-height: 200px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.public-kpi-grid {
+  margin-top: 0;
+}
+
+.public-day-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.public-day-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.public-day-btn:hover {
+  border-color: var(--accent);
+}
+
+.public-day-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
 
 .browse-stats-hint {
   margin: 0.25rem 0 0;
