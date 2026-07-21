@@ -1,0 +1,297 @@
+import { apiBase } from './api.js';
+
+const MAP_PAGE_SIZE = 400;
+const ZOOM_CLUSTERS_UNTIL = 13;
+
+const SYSTEM_COLORS = {
+  digalert: '#3b82f6',
+  'usan-ca': '#22c55e',
+  'usan-nv': '#f97316',
+};
+
+const statsEl = document.getElementById('public-stats');
+const rangeEl = document.getElementById('public-range');
+const legendEl = document.getElementById('public-map-legend');
+const paginationEl = document.getElementById('public-map-pagination');
+
+let map = null;
+let clusterGroup = null;
+let tickets = [];
+let total = 0;
+let mapPage = 0;
+let range = null;
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function systemLabel(system) {
+  if (system === 'digalert') return 'Dig Alert';
+  if (system === 'usan-ca') return 'USAN CA';
+  return 'USAN NV';
+}
+
+function formatDate(iso) {
+  if (!iso) return '';
+  const date = new Date(`${iso}T12:00:00`);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+async function publicRequest(path) {
+  const res = await fetch(`${apiBase()}${path}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || res.statusText);
+  }
+  return data;
+}
+
+function ticketMapCenter(ticket) {
+  if (ticket.centroid_y != null && ticket.centroid_x != null) {
+    return [ticket.centroid_y, ticket.centroid_x];
+  }
+  if (
+    ticket.bbox_min_lat != null &&
+    ticket.bbox_max_lat != null &&
+    ticket.bbox_min_lon != null &&
+    ticket.bbox_max_lon != null
+  ) {
+    return [
+      (ticket.bbox_min_lat + ticket.bbox_max_lat) / 2,
+      (ticket.bbox_min_lon + ticket.bbox_max_lon) / 2,
+    ];
+  }
+  return null;
+}
+
+function browsePinSize(zoom) {
+  if (zoom < ZOOM_CLUSTERS_UNTIL) {
+    return Math.round(Math.min(36, Math.max(22, 48 - zoom * 0.9)));
+  }
+  return Math.round(Math.min(52, Math.max(30, 68 - zoom * 1.1)));
+}
+
+function browseClusterStyle(counts) {
+  const entries = Object.entries(counts).filter(([, n]) => n > 0);
+  const totalCount = entries.reduce((sum, [, n]) => sum + n, 0);
+  if (entries.length === 1) {
+    return {
+      total: totalCount,
+      style: `background:${SYSTEM_COLORS[entries[0][0]]}`,
+    };
+  }
+  let pct = 0;
+  const stops = [];
+  for (const [system, count] of entries) {
+    const start = pct;
+    pct += (count / totalCount) * 100;
+    stops.push(`${SYSTEM_COLORS[system]} ${start}% ${pct}%`);
+  }
+  return {
+    total: totalCount,
+    style: `background:conic-gradient(${stops.join(', ')})`,
+  };
+}
+
+function browseClusterIcon(cluster) {
+  const counts = { digalert: 0, 'usan-ca': 0, 'usan-nv': 0 };
+  cluster.getAllChildMarkers().forEach((marker) => {
+    const system = marker.options.browseSystem;
+    if (system && counts[system] !== undefined) counts[system]++;
+  });
+  const { total: clusterTotal, style } = browseClusterStyle(counts);
+  const count = clusterTotal || cluster.getChildCount();
+  let sizeClass = 'browse-cluster-sm';
+  if (count >= 25) sizeClass = 'browse-cluster-lg';
+  else if (count >= 10) sizeClass = 'browse-cluster-md';
+  return L.divIcon({
+    html: `<span class="browse-cluster ${sizeClass}" style="${style}">${count}</span>`,
+    className: 'browse-cluster-icon',
+    iconSize: L.point(44, 44),
+  });
+}
+
+function createTicketPin(ticket, latlng, color, label, zoom) {
+  const size = browsePinSize(zoom);
+  const icon = L.divIcon({
+    className: 'browse-pin-icon',
+    html: `<span class="browse-pin-marker" style="--pin-color:${color};--pin-size:${size}px"><span class="browse-pin-core"></span></span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+  const marker = L.marker(latlng, { icon, browseSystem: ticket.system });
+  marker.bindTooltip(label, { sticky: true });
+  return marker;
+}
+
+function initMap() {
+  map = L.map('public-map').setView([36.16, -115.15], 7);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap',
+  }).addTo(map);
+
+  clusterGroup = L.markerClusterGroup({
+    maxClusterRadius: 56,
+    disableClusteringAtZoom: ZOOM_CLUSTERS_UNTIL,
+    showCoverageOnHover: false,
+    spiderfyOnMaxZoom: false,
+    iconCreateFunction: browseClusterIcon,
+  });
+  map.addLayer(clusterGroup);
+
+  map.on('zoomend', () => renderMapPins(false));
+}
+
+function renderMapPins(fitBounds = false) {
+  if (!map || !clusterGroup) return;
+
+  const zoom = map.getZoom();
+  clusterGroup.clearLayers();
+  const boundsLayers = [];
+
+  for (const ticket of tickets) {
+    const center = ticketMapCenter(ticket);
+    if (!center) continue;
+    const color = SYSTEM_COLORS[ticket.system] ?? '#3b82f6';
+    const label = [
+      systemLabel(ticket.system),
+      ticket.ticket_number,
+      ticket.revision ? `/ ${ticket.revision}` : '',
+      ticket.work_type ? `· ${ticket.work_type}` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const marker = createTicketPin(ticket, center, color, label, zoom);
+    clusterGroup.addLayer(marker);
+    boundsLayers.push(marker);
+  }
+
+  updateLegend();
+
+  if (fitBounds && boundsLayers.length) {
+    const combined = boundsLayers[0].getLatLng();
+    const bounds = L.latLngBounds(combined, combined);
+    for (let i = 1; i < boundsLayers.length; i++) {
+      bounds.extend(boundsLayers[i].getLatLng());
+    }
+    map.fitBounds(bounds, { padding: [28, 28], maxZoom: 10 });
+  }
+}
+
+function updateLegend() {
+  if (!legendEl) return;
+  const systems = [...new Set(tickets.map((ticket) => ticket.system))];
+  if (!systems.length) {
+    legendEl.classList.add('hidden');
+    legendEl.innerHTML = '';
+    return;
+  }
+  legendEl.classList.remove('hidden');
+  legendEl.innerHTML = systems
+    .map(
+      (system) =>
+        `<span class="browse-legend-item"><span class="browse-legend-swatch" style="background:${SYSTEM_COLORS[system]}"></span>${systemLabel(system)}</span>`
+    )
+    .join('');
+}
+
+function renderPagination() {
+  if (!paginationEl) return;
+
+  if (total <= MAP_PAGE_SIZE) {
+    paginationEl.classList.add('hidden');
+    paginationEl.innerHTML = '';
+    return;
+  }
+
+  const shown = tickets.length;
+  const start = shown ? mapPage * MAP_PAGE_SIZE + 1 : 0;
+  const end = shown ? Math.min(mapPage * MAP_PAGE_SIZE + shown, total) : 0;
+  const pageCount = Math.max(1, Math.ceil(total / MAP_PAGE_SIZE));
+
+  paginationEl.classList.remove('hidden');
+  paginationEl.innerHTML = `
+    <span class="muted">Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()} tickets with map data</span>
+    <div class="pagination">
+      <button class="btn btn-secondary" id="public-map-prev" type="button" ${mapPage === 0 ? 'disabled' : ''}>Previous</button>
+      <span class="muted">Page ${mapPage + 1} of ${pageCount}</span>
+      <button class="btn btn-secondary" id="public-map-next" type="button" ${(mapPage + 1) * MAP_PAGE_SIZE >= total ? 'disabled' : ''}>Next</button>
+    </div>`;
+
+  document.getElementById('public-map-prev')?.addEventListener('click', () => {
+    if (mapPage > 0) void loadTickets(mapPage - 1, false);
+  });
+  document.getElementById('public-map-next')?.addEventListener('click', () => {
+    if ((mapPage + 1) * MAP_PAGE_SIZE < total) void loadTickets(mapPage + 1, false);
+  });
+}
+
+function renderStats(summary) {
+  const bySystem = summary.bySystem ?? [];
+  const totalCount = summary.totals?.total ?? 0;
+  const activeCount = summary.totals?.active ?? 0;
+
+  statsEl.innerHTML = `
+    <div class="kpi-grid public-kpi-grid">
+      <div class="kpi-card">
+        <span class="kpi-label">Total tickets</span>
+        <span class="kpi-value">${totalCount.toLocaleString()}</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-label">Active today</span>
+        <span class="kpi-value">${activeCount.toLocaleString()}</span>
+      </div>
+      ${bySystem
+        .map(
+          (row) => `
+        <div class="kpi-card">
+          <span class="kpi-label">${escapeHtml(systemLabel(row.system))}</span>
+          <span class="kpi-value">${Number(row.total ?? 0).toLocaleString()}</span>
+          <span class="muted">${Number(row.active ?? 0).toLocaleString()} active</span>
+        </div>`
+        )
+        .join('')}
+    </div>
+    <p class="browse-stats-hint muted">Counts include tickets whose work window overlaps the last 7 days.</p>`;
+}
+
+function renderRange() {
+  if (!rangeEl || !range) return;
+  rangeEl.textContent = `${formatDate(range.startDate)} – ${formatDate(range.endDate)} · last ${range.days} days`;
+}
+
+async function loadSummary() {
+  const summary = await publicRequest('/public/summary');
+  range = summary.range ?? range;
+  renderRange();
+  renderStats(summary);
+}
+
+async function loadTickets(page = 0, fitBounds = true) {
+  mapPage = page;
+  const data = await publicRequest(`/public/tickets?limit=${MAP_PAGE_SIZE}&offset=${page * MAP_PAGE_SIZE}`);
+  range = data.range ?? range;
+  tickets = data.tickets ?? [];
+  total = data.total ?? tickets.length;
+  renderRange();
+  renderMapPins(fitBounds);
+  renderPagination();
+}
+
+async function boot() {
+  initMap();
+  try {
+    await Promise.all([loadSummary(), loadTickets(0, true)]);
+    map.invalidateSize();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    statsEl.innerHTML = `<p class="error">Unable to load public data: ${escapeHtml(message)}</p>`;
+    if (rangeEl) rangeEl.textContent = 'Data unavailable';
+  }
+}
+
+boot();

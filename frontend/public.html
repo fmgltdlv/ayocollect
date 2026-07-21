@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>811 Ticket Activity — Last 7 Days</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body class="public-page">
+  <header class="header">
+    <div>
+      <h1>811 Ticket Activity</h1>
+      <p id="public-range" class="public-subtitle muted">Loading last 7 days…</p>
+    </div>
+    <div class="header-actions">
+      <a class="btn btn-secondary btn-sm" href="/">Staff sign-in</a>
+    </div>
+  </header>
+
+  <main class="public-main">
+    <section class="panel public-stats-panel">
+      <div id="public-stats" class="public-stats">Loading ticket counts…</div>
+    </section>
+
+    <section class="panel public-map-panel">
+      <div class="public-map-header">
+        <h2>Ticket map</h2>
+        <p class="muted public-map-hint">Pins show tickets with work windows in the last 7 days. Zoom in to see individual locations.</p>
+      </div>
+      <div id="public-map" class="public-map"></div>
+      <div id="public-map-legend" class="browse-map-legend hidden"></div>
+      <div id="public-map-pagination" class="browse-map-pagination hidden"></div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="/config.js"></script>
+  <script type="module" src="/js/public.js"></script>
+</body>
+</html>

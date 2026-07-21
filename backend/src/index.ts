@@ -48,6 +48,7 @@ import { triggerDedicatedScraper } from './lib/scraper-proxy';
 import { createContainerJob, failContainerJob, finalizeStaleContainerJobs } from './lib/container-jobs';
 import { getAutoFetchSettings, getSetting, isFetchStopped, setSetting } from './lib/settings';
 import { ingestRoutes } from './routes/ingest';
+import { publicRoutes } from './routes/public';
 import {
   countUnreadFeedback,
   listFeedback,
@@ -88,6 +89,7 @@ app.use(
 );
 
 app.route('/api/ingest', ingestRoutes);
+app.route('/api/public', publicRoutes);
 
 app.get('/api/utility-layers/:layerId', async (c) => {
   const token = c.req.query('token');
