@@ -99,12 +99,14 @@ export function buildListConditions(system: TicketSystem, params: BrowseListPara
       binds.push(params.endDate + 'T23:59:59', params.endDate + 'T23:59:59');
     }
   } else {
-    if (params.startDate) {
-      conditions.push('job_start_date >= ?');
+    if (params.startDate && params.endDate) {
+      conditions.push('job_start_date <= ? AND work_expiration_date >= ?');
+      binds.push(params.endDate + 'T23:59:59', params.startDate);
+    } else if (params.startDate) {
+      conditions.push('work_expiration_date >= ?');
       binds.push(params.startDate);
-    }
-    if (params.endDate) {
-      conditions.push('work_expiration_date <= ?');
+    } else if (params.endDate) {
+      conditions.push('job_start_date <= ?');
       binds.push(params.endDate + 'T23:59:59');
     }
   }

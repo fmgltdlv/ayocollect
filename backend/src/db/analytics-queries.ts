@@ -42,8 +42,13 @@ function dateRangeWhere(system: TicketSystem, startDate?: string, endDate?: stri
     if (startDate) parts.push(`(completed >= '${startDate}' OR replace_by_date >= '${startDate}')`);
     if (endDate) parts.push(`(completed <= '${endDate}T23:59:59' OR replace_by_date <= '${endDate}T23:59:59')`);
   } else {
-    if (startDate) parts.push(`job_start_date >= '${startDate}'`);
-    if (endDate) parts.push(`work_expiration_date <= '${endDate}T23:59:59'`);
+    if (startDate && endDate) {
+      parts.push(`job_start_date <= '${endDate}T23:59:59' AND work_expiration_date >= '${startDate}'`);
+    } else if (startDate) {
+      parts.push(`work_expiration_date >= '${startDate}'`);
+    } else if (endDate) {
+      parts.push(`job_start_date <= '${endDate}T23:59:59'`);
+    }
   }
   return parts.join(' AND ');
 }
