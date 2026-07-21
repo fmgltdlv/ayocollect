@@ -5,7 +5,7 @@ import type { Env, TicketSystem } from '../types';
 
 type HonoEnv = { Bindings: Env };
 
-const ALL_SYSTEMS: TicketSystem[] = ['digalert', 'usan-ca', 'usan-nv'];
+const PUBLIC_SYSTEMS: TicketSystem[] = ['usan-nv'];
 const PUBLIC_DAYS = 7;
 const PUBLIC_MAX_LIMIT = BROWSE_MAP_PAGE_SIZE;
 
@@ -73,11 +73,12 @@ publicRoutes.get('/summary', async (c) => {
   const summary = await getAnalyticsSummary(c.env.DB, {
     startDate: range.startDate,
     endDate: range.endDate,
-    systems: ALL_SYSTEMS,
+    systems: PUBLIC_SYSTEMS,
   });
 
   c.header('Cache-Control', 'public, max-age=300');
   return c.json({
+    system: PUBLIC_SYSTEMS[0],
     range,
     ...publicSummary(summary),
   });
@@ -88,7 +89,7 @@ publicRoutes.get('/tickets', async (c) => {
   const limit = Math.min(Math.max(Number(c.req.query('limit') ?? PUBLIC_MAX_LIMIT), 1), PUBLIC_MAX_LIMIT);
   const offset = Math.max(Number(c.req.query('offset') ?? 0), 0);
 
-  const { tickets: rows, total } = await listTicketsMulti(c.env.DB, ALL_SYSTEMS, {
+  const { tickets: rows, total } = await listTicketsMulti(c.env.DB, PUBLIC_SYSTEMS, {
     startDate: range.startDate,
     endDate: range.endDate,
     limit,
@@ -100,5 +101,5 @@ publicRoutes.get('/tickets', async (c) => {
     .filter((row): row is PublicTicketRow => row !== null);
 
   c.header('Cache-Control', 'public, max-age=300');
-  return c.json({ range, tickets, total, limit, offset });
+  return c.json({ system: PUBLIC_SYSTEMS[0], range, tickets, total, limit, offset });
 });

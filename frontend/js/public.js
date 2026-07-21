@@ -3,11 +3,8 @@ import { apiBase } from './api.js';
 const MAP_PAGE_SIZE = 400;
 const ZOOM_CLUSTERS_UNTIL = 13;
 
-const SYSTEM_COLORS = {
-  digalert: '#3b82f6',
-  'usan-ca': '#22c55e',
-  'usan-nv': '#f97316',
-};
+const PUBLIC_SYSTEM = 'usan-nv';
+const PUBLIC_SYSTEM_COLOR = '#f97316';
 
 const statsEl = document.getElementById('public-stats');
 const rangeEl = document.getElementById('public-range');
@@ -29,9 +26,7 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-function systemLabel(system) {
-  if (system === 'digalert') return 'Dig Alert';
-  if (system === 'usan-ca') return 'USAN CA';
+function systemLabel() {
   return 'USAN NV';
 }
 
@@ -75,36 +70,9 @@ function browsePinSize(zoom) {
   return Math.round(Math.min(52, Math.max(30, 68 - zoom * 1.1)));
 }
 
-function browseClusterStyle(counts) {
-  const entries = Object.entries(counts).filter(([, n]) => n > 0);
-  const totalCount = entries.reduce((sum, [, n]) => sum + n, 0);
-  if (entries.length === 1) {
-    return {
-      total: totalCount,
-      style: `background:${SYSTEM_COLORS[entries[0][0]]}`,
-    };
-  }
-  let pct = 0;
-  const stops = [];
-  for (const [system, count] of entries) {
-    const start = pct;
-    pct += (count / totalCount) * 100;
-    stops.push(`${SYSTEM_COLORS[system]} ${start}% ${pct}%`);
-  }
-  return {
-    total: totalCount,
-    style: `background:conic-gradient(${stops.join(', ')})`,
-  };
-}
-
 function browseClusterIcon(cluster) {
-  const counts = { digalert: 0, 'usan-ca': 0, 'usan-nv': 0 };
-  cluster.getAllChildMarkers().forEach((marker) => {
-    const system = marker.options.browseSystem;
-    if (system && counts[system] !== undefined) counts[system]++;
-  });
-  const { total: clusterTotal, style } = browseClusterStyle(counts);
-  const count = clusterTotal || cluster.getChildCount();
+  const count = cluster.getChildCount();
+  const style = `background:${PUBLIC_SYSTEM_COLOR}`;
   let sizeClass = 'browse-cluster-sm';
   if (count >= 25) sizeClass = 'browse-cluster-lg';
   else if (count >= 10) sizeClass = 'browse-cluster-md';
@@ -156,9 +124,9 @@ function renderMapPins(fitBounds = false) {
   for (const ticket of tickets) {
     const center = ticketMapCenter(ticket);
     if (!center) continue;
-    const color = SYSTEM_COLORS[ticket.system] ?? '#3b82f6';
+    const color = PUBLIC_SYSTEM_COLOR;
     const label = [
-      systemLabel(ticket.system),
+      systemLabel(),
       ticket.ticket_number,
       ticket.revision ? `/ ${ticket.revision}` : '',
       ticket.work_type ? `· ${ticket.work_type}` : '',
@@ -184,19 +152,13 @@ function renderMapPins(fitBounds = false) {
 
 function updateLegend() {
   if (!legendEl) return;
-  const systems = [...new Set(tickets.map((ticket) => ticket.system))];
-  if (!systems.length) {
+  if (!tickets.length) {
     legendEl.classList.add('hidden');
     legendEl.innerHTML = '';
     return;
   }
   legendEl.classList.remove('hidden');
-  legendEl.innerHTML = systems
-    .map(
-      (system) =>
-        `<span class="browse-legend-item"><span class="browse-legend-swatch" style="background:${SYSTEM_COLORS[system]}"></span>${systemLabel(system)}</span>`
-    )
-    .join('');
+  legendEl.innerHTML = `<span class="browse-legend-item"><span class="browse-legend-swatch" style="background:${PUBLIC_SYSTEM_COLOR}"></span>${systemLabel()}</span>`;
 }
 
 function renderPagination() {
@@ -231,37 +193,26 @@ function renderPagination() {
 }
 
 function renderStats(summary) {
-  const bySystem = summary.bySystem ?? [];
   const totalCount = summary.totals?.total ?? 0;
   const activeCount = summary.totals?.active ?? 0;
 
   statsEl.innerHTML = `
     <div class="kpi-grid public-kpi-grid">
       <div class="kpi-card">
-        <span class="kpi-label">Total tickets</span>
+        <span class="kpi-label">USAN NV tickets</span>
         <span class="kpi-value">${totalCount.toLocaleString()}</span>
       </div>
       <div class="kpi-card">
         <span class="kpi-label">Active today</span>
         <span class="kpi-value">${activeCount.toLocaleString()}</span>
       </div>
-      ${bySystem
-        .map(
-          (row) => `
-        <div class="kpi-card">
-          <span class="kpi-label">${escapeHtml(systemLabel(row.system))}</span>
-          <span class="kpi-value">${Number(row.total ?? 0).toLocaleString()}</span>
-          <span class="muted">${Number(row.active ?? 0).toLocaleString()} active</span>
-        </div>`
-        )
-        .join('')}
     </div>
-    <p class="browse-stats-hint muted">Counts include tickets whose work window overlaps the last 7 days.</p>`;
+    <p class="browse-stats-hint muted">Counts include USAN NV tickets whose work window overlaps the last 7 days.</p>`;
 }
 
 function renderRange() {
   if (!rangeEl || !range) return;
-  rangeEl.textContent = `${formatDate(range.startDate)} – ${formatDate(range.endDate)} · last ${range.days} days`;
+  rangeEl.textContent = `${formatDate(range.startDate)} – ${formatDate(range.endDate)} · USAN NV · last ${range.days} days`;
 }
 
 async function loadSummary() {
