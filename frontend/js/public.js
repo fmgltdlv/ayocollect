@@ -1,10 +1,52 @@
-import { apiBase } from './api.js';
+import { apiBase, badgesHtml, parseWktToLatLngs } from './api.js';
 
 const MAP_PAGE_SIZE = 400;
 const ZOOM_CLUSTERS_UNTIL = 13;
 const DAY_OPTIONS = [7, 14, 28];
-
 const PUBLIC_SYSTEM_COLOR = '#f97316';
+
+const PUBLIC_TICKET_SECTIONS = [
+  {
+    title: 'Identification',
+    fields: [
+      { key: 'job_status', label: 'Job status' },
+      { key: 'is_cancelled', label: 'Cancelled' },
+      { key: 'is_successful', label: 'Successful' },
+      { key: 'trail_id', label: 'Trail ID' },
+    ],
+  },
+  {
+    title: 'Location',
+    fields: [
+      { key: 'address', label: 'Address' },
+      { key: 'map_link', label: 'Map link' },
+      { key: 'street_sidewalk_or_parkstrip', label: 'Street / sidewalk / parkstrip' },
+    ],
+  },
+  {
+    title: 'Schedule',
+    fields: [
+      { key: 'job_start_date', label: 'Job start' },
+      { key: 'work_expiration_date', label: 'Work expires' },
+    ],
+  },
+  {
+    title: 'Work',
+    fields: [
+      { key: 'work_type', label: 'Work type' },
+      { key: 'work_activity', label: 'Work activity' },
+      { key: 'excavation_method', label: 'Excavation method' },
+      { key: 'additional_remarks', label: 'Remarks' },
+    ],
+  },
+  {
+    title: 'Record',
+    fields: [
+      { key: 'created_at', label: 'Created' },
+      { key: 'updated_at', label: 'Updated' },
+    ],
+  },
+];
 
 const statsEl = document.getElementById('public-stats');
 const rangeEl = document.getElementById('public-range');
@@ -20,6 +62,8 @@ let total = 0;
 let mapPage = 0;
 let range = null;
 let selectedDays = readDaysFromUrl();
+let detailBackdrop = null;
+let detailMap = null;
 
 function escapeHtml(value) {
   return String(value)
@@ -60,6 +104,95 @@ function formatDate(iso) {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function formatDateTime(value) {
+  if (value === null || value === undefined || value === '') {
+    return '<span class="muted">—</span>';
+  }
+  const date = new Date(String(value));
+  if (!Number.isNaN(date.getTime())) {
+    return escapeHtml(date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }));
+  }
+  return escapeHtml(String(value));
+}
+
+function formatTicketFieldValue(key, value) {
+  if (value === null || value === undefined || value === '') {
+    return '<span class="muted">—</span>';
+  }
+  if (typeof value === 'number' && key.startsWith('is_')) {
+    return value ? 'Yes' : 'No';
+  }
+  if (key === 'map_link') {
+    const url = String(value);
+    return `<a class="info-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">Open map</a>`;
+  }
+  if (key.includes('date') || key.endsWith('_at')) {
+    return formatDateTime(value);
+  }
+  return escapeHtml(String(value));
+}
+
+function ticketInfoHtml(ticket) {
+  const html = PUBLIC_TICKET_SECTIONS.map((section) => {
+    const rows = section.fields
+      .map(({ key, label }) => {
+        const value = ticket[key];
+        if (value === null || value === undefined || value === '') return '';
+        return `<div class="info-row"><dt class="info-label">${label}</dt><dd class="info-value">${formatTicketFieldValue(key, value)}</dd></div>`;
+      })
+      .filter(Boolean)
+      .join('');
+    if (!rows) return '';
+    return `<section class="info-section"><h4 class="info-section-title">${section.title}</h4><dl class="info-grid">${rows}</dl></section>`;
+  })
+    .filter(Boolean)
+    .join('');
+  return html || '<p class="muted">No ticket details available.</p>';
+}
+
+function historyCell(value) {
+  if (value === null || value === undefined || value === '') {
+    return '<span class="muted">—</span>';
+  }
+  return escapeHtml(String(value));
+}
+
+function ticketHistoryTableHtml(history) {
+  if (!history.length) {
+    return '<p class="muted">No history recorded.</p>';
+  }
+
+  const rows = [...history].sort((a, b) => {
+    const ta = a.response_date ? new Date(String(a.response_date)).getTime() : NaN;
+    const tb = b.response_date ? new Date(String(b.response_date)).getTime() : NaN;
+    if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+    if (Number.isNaN(ta)) return 1;
+    if (Number.isNaN(tb)) return -1;
+    return ta - tb;
+  });
+
+  const body = rows
+    .map(
+      (row) => `<tr>
+        <td>${formatDateTime(row.response_date)}</td>
+        <td class="mono">${historyCell(row.request_number)}</td>
+        <td class="mono">${historyCell(row.code)}</td>
+        <td>${historyCell(row.name)}</td>
+        <td class="mono">${historyCell(row.response_code)}</td>
+        <td>${historyCell(row.response_description)}</td>
+        <td>${historyCell(row.comment)}</td>
+      </tr>`
+    )
+    .join('');
+
+  return `<div class="history-table-wrap">
+    <table class="history-table">
+      <thead><tr><th>Date</th><th>Request</th><th>Utility</th><th>Name</th><th>Resp</th><th>Description</th><th>Notes</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  </div>`;
+}
+
 async function publicRequest(path) {
   const res = await fetch(`${apiBase()}${path}`);
   const data = await res.json().catch(() => ({}));
@@ -85,6 +218,159 @@ function ticketMapCenter(ticket) {
     ];
   }
   return null;
+}
+
+function ticketMapBounds(ticket, latlngs) {
+  if (latlngs?.length >= 3) {
+    try {
+      const bounds = L.polygon(latlngs).getBounds();
+      if (bounds.isValid()) return bounds;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (
+    ticket?.bbox_min_lat != null &&
+    ticket?.bbox_max_lat != null &&
+    ticket?.bbox_min_lon != null &&
+    ticket?.bbox_max_lon != null
+  ) {
+    const bounds = L.latLngBounds(
+      [Number(ticket.bbox_min_lat), Number(ticket.bbox_min_lon)],
+      [Number(ticket.bbox_max_lat), Number(ticket.bbox_max_lon)]
+    );
+    if (bounds.isValid()) return bounds;
+  }
+  return null;
+}
+
+function closeDetailModal() {
+  document.removeEventListener('keydown', onDetailModalKeydown);
+  if (detailMap) {
+    detailMap.remove();
+    detailMap = null;
+  }
+  detailBackdrop?.remove();
+  detailBackdrop = null;
+}
+
+function onDetailModalKeydown(event) {
+  if (event.key === 'Escape') closeDetailModal();
+}
+
+function openDetailModal(title) {
+  closeDetailModal();
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop detail-modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal detail-modal" role="dialog" aria-modal="true" aria-labelledby="public-detail-title">
+      <div class="detail-modal-header">
+        <h2 class="detail-modal-title" id="public-detail-title">${escapeHtml(title)}</h2>
+        <button class="btn-secondary detail-modal-close" type="button">Close</button>
+      </div>
+      <div class="detail-modal-body"><p class="muted">Loading detail…</p></div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  detailBackdrop = backdrop;
+  backdrop.querySelector('.detail-modal-close')?.addEventListener('click', closeDetailModal);
+  backdrop.addEventListener('click', (event) => {
+    if (event.target === backdrop) closeDetailModal();
+  });
+  document.addEventListener('keydown', onDetailModalKeydown);
+}
+
+function detailModalBody() {
+  return detailBackdrop?.querySelector('.detail-modal-body') ?? null;
+}
+
+function renderPublicDetail(detail) {
+  const body = detailModalBody();
+  if (!body) return;
+
+  const ticket = detail.ticket ?? {};
+  const stations = detail.stations ?? [];
+  const history = detail.ticketHistory ?? [];
+
+  body.innerHTML = `
+    <p>${badgesHtml(detail.badges)}</p>
+    ${detail.analytics?.hadLateResponse ? '<p class="banner detail-banner">Ticket flagged — utility responded late (888/999 in history).</p>' : ''}
+    <div class="detail-grid">
+      <div class="panel detail-panel-inline">
+        <h3>Ticket info</h3>
+        <div class="ticket-info">${ticketInfoHtml(ticket)}</div>
+        <h3 class="detail-subheading">Utility responses (current)</h3>
+        <table>
+          <thead><tr><th>Code</th><th>Name</th><th>Resp</th><th>Description</th></tr></thead>
+          <tbody>
+            ${stations.length
+              ? stations
+                  .map(
+                    (station) => `<tr>
+                <td>${historyCell(station.code)}</td>
+                <td>${historyCell(station.name)}</td>
+                <td>${historyCell(station.response_code)}</td>
+                <td>${historyCell(station.response_description)}</td>
+              </tr>`
+                  )
+                  .join('')
+              : '<tr><td colspan="4" class="muted">No utility responses recorded.</td></tr>'}
+          </tbody>
+        </table>
+        <details><summary>History (${history.length})</summary>
+          ${ticketHistoryTableHtml(history)}
+        </details>
+      </div>
+      <div class="panel detail-panel-inline">
+        <h3>Map</h3>
+        <div id="public-detail-map" class="public-detail-map"></div>
+      </div>
+    </div>`;
+
+  setTimeout(() => {
+    const mapEl = body.querySelector('#public-detail-map');
+    if (!mapEl) return;
+
+    if (detailMap) {
+      detailMap.remove();
+      detailMap = null;
+    }
+
+    const latlngs = parseWktToLatLngs(ticket.polygon_wkt);
+    const bounds = ticketMapBounds(ticket, latlngs);
+    const center = bounds ? bounds.getCenter() : L.latLng(36.16, -115.15);
+    const zoom = bounds ? 15 : 9;
+
+    detailMap = L.map(mapEl).setView(center, zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap',
+    }).addTo(detailMap);
+
+    if (latlngs.length >= 3) {
+      const polygon = L.polygon(latlngs, {
+        color: PUBLIC_SYSTEM_COLOR,
+        weight: 2,
+        fillOpacity: 0.2,
+      }).addTo(detailMap);
+      detailMap.fitBounds(polygon.getBounds(), { padding: [24, 24], maxZoom: 17 });
+    } else if (bounds) {
+      detailMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 17 });
+    }
+
+    detailMap.invalidateSize();
+  }, 0);
+}
+
+async function openPublicDetail(ticketNumber) {
+  const title = `${systemLabel()} — ${ticketNumber}`;
+  openDetailModal(title);
+  try {
+    const detail = await publicRequest(`/public/tickets/${encodeURIComponent(ticketNumber)}`);
+    renderPublicDetail(detail);
+  } catch (error) {
+    const body = detailModalBody();
+    const message = error instanceof Error ? error.message : String(error);
+    if (body) body.innerHTML = `<p class="error">${escapeHtml(message)}</p>`;
+  }
 }
 
 function browsePinSize(zoom) {
@@ -117,6 +403,9 @@ function createTicketPin(ticket, latlng, color, label, zoom) {
   });
   const marker = L.marker(latlng, { icon, browseSystem: ticket.system });
   marker.bindTooltip(label, { sticky: true });
+  marker.on('click', () => {
+    void openPublicDetail(ticket.ticket_number);
+  });
   return marker;
 }
 
@@ -239,7 +528,7 @@ function renderRange() {
   if (!rangeEl || !range) return;
   rangeEl.textContent = `${formatDate(range.startDate)} – ${formatDate(range.endDate)} · USAN NV · last ${range.days} days`;
   if (mapHintEl) {
-    mapHintEl.textContent = `Pins show USAN NV tickets with work windows in the last ${range.days} days. Zoom in to see individual locations.`;
+    mapHintEl.textContent = `Pins show USAN NV tickets with work windows in the last ${range.days} days. Click a pin for ticket details.`;
   }
 }
 

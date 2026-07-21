@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { BROWSE_MAP_PAGE_SIZE, getAnalyticsSummary } from '../db/analytics-queries';
-import { listTicketsMulti } from '../db/queries';
+import { getUsanDetail, listTicketsMulti } from '../db/queries';
 import type { Env, TicketSystem } from '../types';
 
 type HonoEnv = { Bindings: Env };
@@ -77,6 +77,34 @@ function publicSummary(summary: Awaited<ReturnType<typeof getAnalyticsSummary>>)
   };
 }
 
+function sanitizePublicTicket(ticket: Record<string, unknown>) {
+  const { created_by: _createdBy, id: _id, ...rest } = ticket;
+  return rest;
+}
+
+function sanitizePublicStation(row: Record<string, unknown>) {
+  return {
+    code: row.code ?? null,
+    name: row.name ?? null,
+    response_code: row.response_code ?? null,
+    response_description: row.response_description ?? null,
+    response_date: row.response_date ?? null,
+    comment: row.comment ?? null,
+  };
+}
+
+function sanitizePublicHistory(row: Record<string, unknown>) {
+  return {
+    response_date: row.response_date ?? row.response_date_string ?? null,
+    request_number: row.request_number ?? row.requestNumber ?? row.revision_suffix ?? null,
+    code: row.code ?? null,
+    name: row.name ?? null,
+    response_code: row.response_code ?? null,
+    response_description: row.response_description ?? null,
+    comment: row.comment ?? null,
+  };
+}
+
 export const publicRoutes = new Hono<HonoEnv>();
 
 publicRoutes.get('/summary', async (c) => {
@@ -115,4 +143,22 @@ publicRoutes.get('/tickets', async (c) => {
 
   c.header('Cache-Control', 'public, max-age=300');
   return c.json({ system: PUBLIC_SYSTEMS[0], range, tickets, total, limit, offset });
+});
+
+publicRoutes.get('/tickets/:ticketNumber', async (c) => {
+  const ticketNumber = c.req.param('ticketNumber').trim();
+  if (!ticketNumber) return c.json({ error: 'ticketNumber required' }, 400);
+
+  const detail = await getUsanDetail(c.env.DB, 'usan-nv', ticketNumber);
+  if (!detail) return c.json({ error: 'Not found' }, 404);
+
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json({
+    system: PUBLIC_SYSTEMS[0],
+    ticket: sanitizePublicTicket(detail.ticket as Record<string, unknown>),
+    stations: (detail.stations ?? []).map((row) => sanitizePublicStation(row as Record<string, unknown>)),
+    ticketHistory: (detail.ticketHistory ?? []).map((row) => sanitizePublicHistory(row as Record<string, unknown>)),
+    analytics: detail.analytics,
+    badges: detail.badges,
+  });
 });

@@ -805,6 +805,7 @@ tr.clickable td.ticket-refresh-col {
   align-items: center;
   justify-content: center;
   filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.55));
+  cursor: pointer;
 }
 
 .browse-pin-core {
@@ -940,6 +941,14 @@ tr.clickable td.ticket-refresh-col {
 .public-map {
   height: min(62vh, 640px);
   min-height: 320px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.public-detail-map {
+  height: 240px;
+  min-height: 200px;
   border-radius: 8px;
   border: 1px solid var(--border);
   overflow: hidden;
